@@ -59,10 +59,10 @@ export const Footer: React.FC = () => {
               <li className="flex items-center space-x-1.5">
                 <Mail size={13} className="text-amber-400" />
                 <a
-                  href="mailto:support@vktechnology.shop"
+                  href="mailto:admin@vktechnology.shop"
                   className="hover:underline hover:text-white text-gray-200"
                 >
-                  support@vktechnology.shop
+                  admin@vktechnology.shop
                 </a>
               </li>
               <li className="flex items-center space-x-1.5">

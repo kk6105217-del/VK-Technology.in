@@ -6,7 +6,7 @@ export const openApiSpec = {
     version: '2.0.0',
     contact: {
       name: 'VK Technology Support',
-      email: 'support@vktechnology.shop',
+      email: 'admin@vktechnology.shop',
       url: 'https://www.vktechnology.shop'
     }
   },

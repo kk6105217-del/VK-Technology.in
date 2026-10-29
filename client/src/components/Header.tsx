@@ -165,9 +165,9 @@ export const Header: React.FC<HeaderProps> = ({ onOpenMobileMenu }) => {
           </span>
         </div>
         <div className="hidden md:flex items-center space-x-4 text-gray-400">
-          <a href="mailto:support@vktechnology.shop" className="flex items-center space-x-1 hover:text-white transition">
+          <a href="mailto:admin@vktechnology.shop" className="flex items-center space-x-1 hover:text-white transition">
             <Mail size={12} className="text-amber-400" />
-            <span>Support: support@vktechnology.shop</span>
+            <span>Support: admin@vktechnology.shop</span>
           </a>
           <Link to="/contact" className="hover:text-white transition">24/7 Help</Link>
           <Link to="/track" className="hover:text-white transition">Track Order</Link>
