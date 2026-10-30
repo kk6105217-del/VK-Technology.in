@@ -4,7 +4,6 @@ import {
   Search,
   ShoppingCart,
   Heart,
-  MapPin,
   User as UserIcon,
   ChevronDown,
   ShieldCheck,
@@ -39,10 +38,6 @@ export const Header: React.FC<HeaderProps> = ({ onOpenMobileMenu }) => {
   const [selectedCategory, setSelectedCategory] = useState('');
   const [categories, setCategories] = useState<Category[]>([]);
   const [isAccountOpen, setIsAccountOpen] = useState(false);
-  const [isLocationModalOpen, setIsLocationModalOpen] = useState(false);
-  const [userPincode, setUserPincode] = useState(() => localStorage.getItem('vk_user_pincode') || '500001');
-  const [pincodeInput, setPincodeInput] = useState(userPincode);
-  const [locationName, setLocationName] = useState(() => localStorage.getItem('vk_user_location') || 'India');
   const [showSearchDropdown, setShowSearchDropdown] = useState(false);
   const [recentSearches, setRecentSearches] = useState<string[]>(() => {
     try {
@@ -131,27 +126,6 @@ export const Header: React.FC<HeaderProps> = ({ onOpenMobileMenu }) => {
     } catch {}
   };
 
-  const handleSavePincode = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (pincodeInput.trim().length === 6) {
-      setUserPincode(pincodeInput.trim());
-      localStorage.setItem('vk_user_pincode', pincodeInput.trim());
-      // Friendly location name based on pincode
-      let loc = 'India';
-      if (pincodeInput.startsWith('534')) loc = 'West Godavari / AP';
-      else if (pincodeInput.startsWith('530') || pincodeInput.startsWith('531')) loc = 'Visakhapatnam';
-      else if (pincodeInput.startsWith('520') || pincodeInput.startsWith('521')) loc = 'Vijayawada';
-      else if (pincodeInput.startsWith('500')) loc = 'Hyderabad';
-      else if (pincodeInput.startsWith('560')) loc = 'Bengaluru';
-      else if (pincodeInput.startsWith('600')) loc = 'Chennai';
-      else loc = `PIN ${pincodeInput}`;
-
-      setLocationName(loc);
-      localStorage.setItem('vk_user_location', loc);
-      setIsLocationModalOpen(false);
-    }
-  };
-
   return (
     <header className="bg-vk-dark text-white sticky top-0 z-50 shadow-md">
       {/* Top Notice Bar */}
@@ -206,21 +180,6 @@ export const Header: React.FC<HeaderProps> = ({ onOpenMobileMenu }) => {
             </span>
           </div>
         </Link>
-
-        {/* Deliver to Location Pin */}
-        <button
-          onClick={() => setIsLocationModalOpen(true)}
-          className="hidden md:flex items-center space-x-1 p-1.5 hover:border border-white rounded text-left group"
-          title="Click to change delivery pincode"
-        >
-          <MapPin size={18} className="text-gray-300 mt-1 group-hover:text-amber-400" />
-          <div className="flex flex-col">
-            <span className="text-[11px] text-gray-300 leading-tight">Deliver to</span>
-            <span className="text-xs font-bold leading-tight truncate max-w-[130px]">
-              {locationName} {userPincode}
-            </span>
-          </div>
-        </button>
 
         {/* Amazon-style Large Search Bar */}
         <div ref={searchRef} className="relative flex-1 max-w-3xl">
@@ -525,63 +484,6 @@ export const Header: React.FC<HeaderProps> = ({ onOpenMobileMenu }) => {
           </Link>
         </div>
       </div>
-
-      {/* Pincode / Location Selector Modal */}
-      {isLocationModalOpen && (
-        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
-          <div className="bg-white text-gray-900 rounded-lg max-w-md w-full p-6 shadow-2xl relative animate-in fade-in zoom-in-95 duration-150">
-            <button
-              onClick={() => setIsLocationModalOpen(false)}
-              className="absolute top-4 right-4 text-gray-400 hover:text-gray-700"
-            >
-              <X size={20} />
-            </button>
-            <div className="flex items-center space-x-3 mb-4">
-              <div className="w-10 h-10 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center">
-                <MapPin size={22} />
-              </div>
-              <div>
-                <h3 className="font-bold text-lg text-gray-900">Choose your location</h3>
-                <p className="text-xs text-gray-500">
-                  Select a delivery location to see product availability and dispatch estimates.
-                </p>
-              </div>
-            </div>
-
-            <form onSubmit={handleSavePincode} className="space-y-4">
-              <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">
-                  Enter a 6-digit Indian Pincode
-                </label>
-                <div className="flex space-x-2">
-                  <input
-                    type="text"
-                    maxLength={6}
-                    value={pincodeInput}
-                    onChange={(e) => setPincodeInput(e.target.value.replace(/[^0-9]/g, ''))}
-                    placeholder="e.g. 534204"
-                    className="flex-1 px-3 py-2 border border-gray-300 rounded-md text-sm font-semibold tracking-wider focus:outline-none focus:ring-2 focus:ring-amber-500"
-                  />
-                  <button
-                    type="submit"
-                    className="bg-amber-400 hover:bg-amber-500 text-gray-900 font-bold px-4 py-2 rounded-md text-sm shadow-sm transition"
-                  >
-                    Apply
-                  </button>
-                </div>
-              </div>
-
-              <div className="bg-gray-50 p-3 rounded border border-gray-200 text-xs text-gray-600 space-y-1">
-                <p className="font-semibold text-gray-800">VK Technology Hub & Fulfillment:</p>
-                <p>📍 Fast Express Dispatch across all States & Union Territories of India</p>
-                <p className="text-emerald-700 font-medium">
-                  ⚡ Same/Next-Day dispatch on all orders
-                </p>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
     </header>
   );
 };

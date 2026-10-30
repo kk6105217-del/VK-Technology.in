@@ -136,6 +136,7 @@ export function initDatabase() {
       rating_count INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      version INTEGER NOT NULL DEFAULT 1,
       FOREIGN KEY(category_id) REFERENCES categories(id) ON DELETE RESTRICT
     );
 
@@ -329,10 +330,23 @@ export function initDatabase() {
   // Migrate columns if table already existed
   try { db.exec(`ALTER TABLE orders ADD COLUMN utr_number TEXT;`); } catch (e) {}
   try { db.exec(`ALTER TABLE orders ADD COLUMN payment_screenshot TEXT;`); } catch (e) {}
+  try { db.exec(`ALTER TABLE products ADD COLUMN version INTEGER NOT NULL DEFAULT 1;`); } catch (e) {}
 
   seedInitialData();
   } catch (err) {
     console.warn('[DB] Non-critical warning in initDatabase:', err);
+  }
+}
+
+export function recordAuditLog(adminEmail: string, action: string, targetType: string, targetId: string | number, details?: any) {
+  try {
+    const detailsStr = typeof details === 'string' ? details : (details ? JSON.stringify(details) : null);
+    db.prepare(`
+      INSERT INTO admin_audit_logs (admin_email, action, target_type, target_id, details, created_at)
+      VALUES (?, ?, ?, ?, ?, datetime('now'))
+    `).run(adminEmail, action, targetType, String(targetId), detailsStr);
+  } catch (err) {
+    console.warn('[AuditLog] Failed to record log:', err);
   }
 }
 

@@ -12,7 +12,6 @@ import {
   LayoutDashboard,
   Package,
   ChevronDown,
-  MapPin,
   Flame,
   ShieldCheck,
   HelpCircle,
@@ -36,35 +35,6 @@ export const Header: React.FC = () => {
   const [userDropdownOpen, setUserDropdownOpen] = useState(false);
   const [langDropdownOpen, setLangDropdownOpen] = useState(false);
   const [currentLang, setCurrentLang] = useState(() => localStorage.getItem('vk_language') || 'en');
-
-  // Delivery Pincode State
-  const [pincode, setPincode] = useState(() => localStorage.getItem('vk_pincode') || '560001');
-  const [city, setCity] = useState(() => localStorage.getItem('vk_city') || 'Bengaluru');
-  const [showPincodeModal, setShowPincodeModal] = useState(false);
-  const [tempPincode, setTempPincode] = useState(pincode);
-
-  const handlePincodeSave = (e: React.FormEvent) => {
-    e.preventDefault();
-    const clean = tempPincode.trim();
-    if (clean.length === 6) {
-      setPincode(clean);
-      localStorage.setItem('vk_pincode', clean);
-      // Rough mock city deduction for Indian pincodes
-      const prefix = clean.substring(0, 2);
-      let detectedCity = 'India';
-      if (prefix === '50' || prefix === '51' || prefix === '52' || prefix === '53') detectedCity = 'Hyderabad / AP';
-      else if (prefix === '56' || prefix === '57' || prefix === '58' || prefix === '59') detectedCity = 'Bengaluru';
-      else if (prefix === '40' || prefix === '41' || prefix === '42') detectedCity = 'Mumbai / Pune';
-      else if (prefix === '11') detectedCity = 'New Delhi';
-      else if (prefix === '60' || prefix === '61' || prefix === '62') detectedCity = 'Chennai';
-      else if (prefix === '70') detectedCity = 'Kolkata';
-      setCity(detectedCity);
-      localStorage.setItem('vk_city', detectedCity);
-      setShowPincodeModal(false);
-    } else {
-      alert('Please enter a valid 6-digit Indian PIN code');
-    }
-  };
 
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -112,23 +82,6 @@ export const Header: React.FC = () => {
               </span>
             </div>
           </Link>
-
-          {/* Location Delivery Selector (Amazon Style) */}
-          <button
-            onClick={() => setShowPincodeModal(true)}
-            className="hidden lg:flex items-center gap-1.5 p-1.5 rounded hover:outline hover:outline-1 hover:outline-white text-left transition-all flex-shrink-0"
-            title="Update delivery location"
-          >
-            <MapPin size={18} className="text-slate-300 mt-1" />
-            <div className="text-xs leading-none">
-              <span className="text-[11px] text-slate-400 block font-normal">
-                Deliver to {user ? user.name.split(' ')[0] : 'Customer'}
-              </span>
-              <span className="font-bold text-white text-xs block mt-0.5">
-                {city} {pincode}
-              </span>
-            </div>
-          </button>
 
           {/* Amazon-Style Search Bar with Category Dropdown */}
           <form
@@ -532,45 +485,6 @@ export const Header: React.FC = () => {
                 </div>
               )}
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* Pincode Location Modal */}
-      {showPincodeModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
-          <div className="bg-white rounded-xl shadow-2xl max-w-sm w-full p-6 text-slate-900 space-y-4 animate-in zoom-in-95 duration-150">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <h3 className="font-bold text-base flex items-center gap-1.5">
-                <MapPin size={18} className="text-cyan-600" />
-                Choose your location
-              </h3>
-              <button
-                onClick={() => setShowPincodeModal(false)}
-                className="text-slate-400 hover:text-slate-600"
-              >
-                <X size={18} />
-              </button>
-            </div>
-            <p className="text-xs text-slate-600 leading-relaxed">
-              Select delivery location to see product availability and fast shipping options across India.
-            </p>
-            <form onSubmit={handlePincodeSave} className="space-y-3">
-              <input
-                type="text"
-                maxLength={6}
-                value={tempPincode}
-                onChange={(e) => setTempPincode(e.target.value.replace(/\D/g, ''))}
-                placeholder="Enter a 6-digit Indian PIN code"
-                className="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-amber-400 font-bold"
-              />
-              <button
-                type="submit"
-                className="w-full py-2.5 bg-[#ffd814] hover:bg-[#f7ca00] text-slate-900 font-bold rounded-lg text-xs shadow-xs"
-              >
-                Apply Location
-              </button>
-            </form>
           </div>
         </div>
       )}

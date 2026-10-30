@@ -4,10 +4,14 @@ exports.categoriesRouter = void 0;
 const express_1 = require("express");
 const database_js_1 = require("../database.js");
 const auth_js_1 = require("../middleware/auth.js");
+const events_js_1 = require("../services/events.js");
+const cache_js_1 = require("../utils/cache.js");
 exports.categoriesRouter = (0, express_1.Router)();
-// Public: Get all active categories with product counts
+// Public: Get all active categories with dynamic product counts
 exports.categoriesRouter.get('/', (req, res) => {
     try {
+        const syncStatus = events_js_1.eventBroadcaster.getCatalogSyncStatus();
+        (0, cache_js_1.setDynamicCacheControl)(res, syncStatus.catalogVersion, syncStatus.lastUpdated);
         const categories = database_js_1.db.prepare(`
       SELECT c.*, 
         (SELECT COUNT(*) FROM products p WHERE p.category_id = c.id AND p.is_active = 1) AS product_count
@@ -24,6 +28,7 @@ exports.categoriesRouter.get('/', (req, res) => {
 // Admin: Get all categories including inactive
 exports.categoriesRouter.get('/all', auth_js_1.authenticateToken, auth_js_1.requireAdmin, (req, res) => {
     try {
+        (0, cache_js_1.setPrivateCacheControl)(res);
         const categories = database_js_1.db.prepare(`
       SELECT c.*, 
         (SELECT COUNT(*) FROM products p WHERE p.category_id = c.id) AS product_count
@@ -39,6 +44,8 @@ exports.categoriesRouter.get('/all', auth_js_1.authenticateToken, auth_js_1.requ
 // Public: Get single category by slug
 exports.categoriesRouter.get('/:slug', (req, res) => {
     try {
+        const syncStatus = events_js_1.eventBroadcaster.getCatalogSyncStatus();
+        (0, cache_js_1.setDynamicCacheControl)(res, syncStatus.catalogVersion, syncStatus.lastUpdated);
         const category = database_js_1.db.prepare(`
       SELECT c.*, 
         (SELECT COUNT(*) FROM products p WHERE p.category_id = c.id AND p.is_active = 1) AS product_count
@@ -67,10 +74,18 @@ exports.categoriesRouter.post('/', auth_js_1.authenticateToken, auth_js_1.requir
         const result = database_js_1.db.prepare(`
       INSERT INTO categories (name, slug, description, icon, image_url, sort_order, is_active)
       VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(name, cleanSlug, description || null, icon || 'Cpu', image_url || null, sort_order || 0, is_active ?? 1);
+    `).run(name.trim(), cleanSlug, description || null, icon || 'Cpu', image_url || null, sort_order || 0, is_active ?? 1);
+        const newId = Number(result.lastInsertRowid);
+        const newCategory = database_js_1.db.prepare('SELECT * FROM categories WHERE id = ?').get(newId);
+        (0, database_js_1.recordAuditLog)(req.user?.email || 'admin@vktechnology.shop', 'CREATE_CATEGORY', 'Category', newId, { name, slug: cleanSlug });
+        try {
+            events_js_1.eventBroadcaster.broadcast('CATEGORY_UPDATED', { category: newCategory });
+        }
+        catch { }
         res.status(201).json({
             message: 'Category created successfully.',
-            id: Number(result.lastInsertRowid)
+            category: newCategory,
+            id: newId
         });
     }
     catch (error) {
@@ -96,7 +111,16 @@ exports.categoriesRouter.put('/:id', auth_js_1.authenticateToken, auth_js_1.requ
         WHERE id = ?
       `).run(name, slug, description || null, icon || 'Cpu', image_url || null, sort_order || 0, is_active !== undefined ? (is_active ? 1 : 0) : 1, catId);
         }
-        res.json({ message: 'Category updated successfully.' });
+        const updatedCategory = database_js_1.db.prepare('SELECT * FROM categories WHERE id = ?').get(catId);
+        (0, database_js_1.recordAuditLog)(req.user?.email || 'admin@vktechnology.shop', 'UPDATE_CATEGORY', 'Category', catId, { name, slug });
+        try {
+            events_js_1.eventBroadcaster.broadcast('CATEGORY_UPDATED', { category: updatedCategory });
+        }
+        catch { }
+        res.json({
+            message: 'Category updated successfully.',
+            category: updatedCategory
+        });
     }
     catch (error) {
         console.error('Update category error:', error);
@@ -117,6 +141,11 @@ exports.categoriesRouter.delete('/:id', auth_js_1.authenticateToken, auth_js_1.r
             console.warn('Reassigning products during category delete:', reassignErr);
         }
         database_js_1.db.prepare('DELETE FROM categories WHERE id = ?').run(catId);
+        (0, database_js_1.recordAuditLog)(req.user?.email || 'admin@vktechnology.shop', 'DELETE_CATEGORY', 'Category', catId);
+        try {
+            events_js_1.eventBroadcaster.broadcast('CATEGORY_UPDATED', { id: Number(catId), deleted: true });
+        }
+        catch { }
         res.json({ message: 'Category deleted successfully.' });
     }
     catch (error) {

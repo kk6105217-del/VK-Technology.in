@@ -3,6 +3,7 @@ import { Plus, Edit, Trash2, Layers, CheckCircle2, AlertCircle, X } from 'lucide
 import { api } from '../../services/api';
 import { Category } from '../../types';
 import { getCategoryIcon } from '../../components/Navbar';
+import { useCatalogSync } from '../../hooks/useCatalogSync';
 
 export const AdminCategories: React.FC = () => {
   const [categories, setCategories] = useState<Category[]>([]);
@@ -23,6 +24,11 @@ export const AdminCategories: React.FC = () => {
   useEffect(() => {
     loadCategories();
   }, []);
+
+  // Real-time synchronization across servers and browser sessions
+  useCatalogSync(() => {
+    loadCategories();
+  });
 
   const loadCategories = async () => {
     try {

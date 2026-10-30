@@ -1,13 +1,63 @@
 import { Router, Response } from 'express';
-import { db } from '../database.js';
+import { db, recordAuditLog } from '../database.js';
 import { authenticateToken, requireAdmin, AuthenticatedRequest } from '../middleware/auth.js';
 import { eventBroadcaster } from '../services/events.js';
+import { setDynamicCacheControl, setPrivateCacheControl } from '../utils/cache.js';
 
 export const productsRouter = Router();
+
+// Helper to fetch full populated product record
+function fetchFullProduct(idOrSlug: number | string): any {
+  const isId = /^\d+$/.test(String(idOrSlug));
+  const sql = `
+    SELECT 
+      p.*,
+      c.name as category_name,
+      c.slug as category_slug,
+      (
+        SELECT image_url FROM product_images pi 
+        WHERE pi.product_id = p.id 
+        ORDER BY pi.is_primary DESC, pi.sort_order ASC 
+        LIMIT 1
+      ) as primary_image
+    FROM products p
+    LEFT JOIN categories c ON p.category_id = c.id
+    WHERE ${isId ? 'p.id = ?' : 'p.slug = ?'}
+  `;
+  const prod = db.prepare(sql).get(idOrSlug) as any;
+  if (!prod) return null;
+
+  try { prod.specifications = JSON.parse(prod.specifications_json || '{}'); } catch { prod.specifications = {}; }
+  try { prod.features = JSON.parse(prod.features_json || '[]'); } catch { prod.features = []; }
+  try { prod.package_contents = JSON.parse(prod.package_contents_json || '[]'); } catch { prod.package_contents = []; }
+
+  prod.images = db.prepare(`
+    SELECT id, image_url, alt_text, is_primary, sort_order 
+    FROM product_images 
+    WHERE product_id = ? 
+    ORDER BY is_primary DESC, sort_order ASC
+  `).all(prod.id);
+
+  return prod;
+}
+
+// Global Catalog Sync Status Endpoint
+productsRouter.get('/sync/status', (req, res) => {
+  setDynamicCacheControl(res);
+  const syncStatus = eventBroadcaster.getCatalogSyncStatus();
+  const totalRow = db.prepare('SELECT COUNT(*) as count FROM products WHERE is_active = 1').get() as any;
+  res.json({
+    ...syncStatus,
+    totalProducts: totalRow?.count || 0
+  });
+});
 
 // Public: Get all products with search, filters, pagination, and sorting
 productsRouter.get('/', (req, res) => {
   try {
+    const syncStatus = eventBroadcaster.getCatalogSyncStatus();
+    setDynamicCacheControl(res, syncStatus.catalogVersion, syncStatus.lastUpdated);
+
     const {
       q,
       category,
@@ -102,21 +152,19 @@ productsRouter.get('/', (req, res) => {
         break;
     }
 
-    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-
-    // Count total products
+    // Count total matching
     const countSql = `
-      SELECT COUNT(*) as total 
+      SELECT COUNT(*) as count 
       FROM products p
       LEFT JOIN categories c ON p.category_id = c.id
-      ${whereClause}
+      WHERE ${conditions.join(' AND ')}
     `;
-    const countRow = db.prepare(countSql).get(...params) as { total: number } | undefined;
-    const total = (countRow as any)?.total ?? 0;
+    const countRow = db.prepare(countSql).get(...params) as { count: number };
+    const total = countRow?.count || 0;
 
-    // Fetch paginated products with primary image
+    // Fetch paginated results
     const offset = (Number(page) - 1) * Number(limit);
-    const sql = `
+    const selectSql = `
       SELECT 
         p.*,
         c.name as category_name,
@@ -129,23 +177,22 @@ productsRouter.get('/', (req, res) => {
         ) as primary_image
       FROM products p
       LEFT JOIN categories c ON p.category_id = c.id
-      ${whereClause}
+      WHERE ${conditions.join(' AND ')}
       ORDER BY ${orderBy}
       LIMIT ? OFFSET ?
     `;
 
-    const products = db.prepare(sql).all(...params, Number(limit), offset);
+    const products = db.prepare(selectSql).all(...params, Number(limit), offset);
 
-    // Format JSON fields
-    const formattedProducts = products.map((prod: any) => ({
-      ...prod,
-      specifications: prod.specifications_json ? JSON.parse(prod.specifications_json) : {},
-      features: prod.features_json ? JSON.parse(prod.features_json) : [],
-      package_contents: prod.package_contents_json ? JSON.parse(prod.package_contents_json) : [],
-    }));
+    // Parse JSON fields
+    products.forEach((p: any) => {
+      try { p.specifications = JSON.parse(p.specifications_json || '{}'); } catch { p.specifications = {}; }
+      try { p.features = JSON.parse(p.features_json || '[]'); } catch { p.features = []; }
+      try { p.package_contents = JSON.parse(p.package_contents_json || '[]'); } catch { p.package_contents = []; }
+    });
 
     res.json({
-      products: formattedProducts,
+      products,
       pagination: {
         total,
         page: Number(page),
@@ -162,6 +209,8 @@ productsRouter.get('/', (req, res) => {
 // Admin: Get all products (including inactive) with inventory status
 productsRouter.get('/admin/all', authenticateToken, requireAdmin, (req: AuthenticatedRequest, res: Response) => {
   try {
+    setPrivateCacheControl(res);
+
     const { search, category, status } = req.query;
     let conditions: string[] = ['1=1'];
     let params: any[] = [];
@@ -207,34 +256,20 @@ productsRouter.get('/admin/all', authenticateToken, requireAdmin, (req: Authenti
 // Public: Get single product by slug or id
 productsRouter.get('/:slug', (req, res) => {
   try {
-    const isId = /^\d+$/.test(req.params.slug);
-    const sql = `
-      SELECT 
-        p.*,
-        c.name as category_name,
-        c.slug as category_slug
-      FROM products p
-      LEFT JOIN categories c ON p.category_id = c.id
-      WHERE ${isId ? 'p.id = ?' : 'p.slug = ?'}
-    `;
+    const syncStatus = eventBroadcaster.getCatalogSyncStatus();
+    setDynamicCacheControl(res, syncStatus.catalogVersion, syncStatus.lastUpdated);
 
-    const product = db.prepare(sql).get(req.params.slug) as any;
+    const product = fetchFullProduct(req.params.slug);
 
     if (!product) {
       res.status(404).json({ error: 'Product not found.' });
       return;
     }
 
-    // Increment view count
-    db.prepare('UPDATE products SET view_count = view_count + 1 WHERE id = ?').run(product.id);
-
-    // Fetch images
-    const images = db.prepare(`
-      SELECT id, image_url, alt_text, is_primary, sort_order 
-      FROM product_images 
-      WHERE product_id = ? 
-      ORDER BY is_primary DESC, sort_order ASC
-    `).all(product.id);
+    // Increment view count safely
+    try {
+      db.prepare('UPDATE products SET view_count = view_count + 1 WHERE id = ?').run(product.id);
+    } catch {}
 
     // Fetch approved reviews
     const reviews = db.prepare(`
@@ -248,24 +283,27 @@ productsRouter.get('/:slug', (req, res) => {
     const relatedProducts = db.prepare(`
       SELECT 
         p.id, p.name, p.slug, p.regular_price, p.discounted_price, p.stock_quantity, p.rating_avg, p.rating_count,
-        (SELECT image_url FROM product_images pi WHERE pi.product_id = p.id ORDER BY pi.is_primary DESC LIMIT 1) as primary_image
+        (
+          SELECT image_url FROM product_images pi 
+          WHERE pi.product_id = p.id 
+          ORDER BY pi.is_primary DESC, pi.sort_order ASC 
+          LIMIT 1
+        ) as primary_image
       FROM products p
       WHERE p.category_id = ? AND p.id != ? AND p.is_active = 1
-      LIMIT 6
+      ORDER BY p.is_featured DESC, p.id DESC
+      LIMIT 4
     `).all(product.category_id, product.id);
 
     res.json({
       product: {
         ...product,
-        specifications: product.specifications_json ? JSON.parse(product.specifications_json) : {},
-        features: product.features_json ? JSON.parse(product.features_json) : [],
-        package_contents: product.package_contents_json ? JSON.parse(product.package_contents_json) : [],
-        images,
         reviews,
         relatedProducts
       }
     });
   } catch (error: any) {
+    console.error('Product detail error:', error);
     res.status(500).json({ error: 'Failed to fetch product details.' });
   }
 });
@@ -297,11 +335,25 @@ productsRouter.post('/', authenticateToken, requireAdmin, (req: AuthenticatedReq
       images = []
     } = req.body;
 
-    if (!name || !sku || !category_id || regular_price === undefined) {
-      res.status(400).json({ error: 'Please provide product name, SKU, category, and regular price.' });
+    // Strict input validation
+    if (!name || typeof name !== 'string' || !name.trim()) {
+      res.status(400).json({ error: 'Product name is required.' });
+      return;
+    }
+    if (!sku || typeof sku !== 'string' || !sku.trim()) {
+      res.status(400).json({ error: 'SKU code is required.' });
+      return;
+    }
+    if (!category_id) {
+      res.status(400).json({ error: 'Category is required.' });
+      return;
+    }
+    if (regular_price === undefined || regular_price === null || isNaN(Number(regular_price)) || Number(regular_price) < 0) {
+      res.status(400).json({ error: 'A valid non-negative regular price is required.' });
       return;
     }
 
+    // Slug generation and collision resolution
     let cleanSlug = (slug || name).toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
     if (!cleanSlug) cleanSlug = `product-${Date.now()}`;
     const existingSlug = db.prepare('SELECT id FROM products WHERE slug = ?').get(cleanSlug);
@@ -309,10 +361,12 @@ productsRouter.post('/', authenticateToken, requireAdmin, (req: AuthenticatedReq
       cleanSlug = `${cleanSlug}-${Date.now().toString().slice(-4)}`;
     }
 
+    // SKU deduplication and idempotency protection
     let cleanSku = sku.trim().toUpperCase();
     const existingSku = db.prepare('SELECT id FROM products WHERE sku = ?').get(cleanSku);
     if (existingSku) {
-      cleanSku = `${cleanSku}-${Date.now().toString().slice(-4)}`;
+      res.status(409).json({ error: `A product with SKU "${cleanSku}" already exists. Please use a unique SKU.` });
+      return;
     }
 
     let validCatId = Number(category_id);
@@ -322,65 +376,90 @@ productsRouter.post('/', authenticateToken, requireAdmin, (req: AuthenticatedReq
       if (firstCat) validCatId = firstCat.id;
     }
 
-    const result = db.prepare(`
-      INSERT INTO products (
-        name, slug, sku, category_id, subcategory, short_description, description,
-        regular_price, discounted_price, stock_quantity, brand, specifications_json,
-        features_json, compatibility, package_contents_json, shipping_weight_grams,
-        estimated_dispatch_days, warranty_info, is_featured, is_active
-      ) VALUES (
-        ?, ?, ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?,
-        ?, ?, ?, ?,
-        ?, ?, ?, ?
-      )
-    `).run(
-      name.trim(),
-      cleanSlug,
-      cleanSku,
-      validCatId,
-      subcategory || null,
-      short_description || null,
-      description || name,
-      Number(regular_price),
-      discounted_price ? Number(discounted_price) : null,
-      Number(stock_quantity || 0),
-      brand || 'VK Technology',
-      specifications ? JSON.stringify(specifications) : '{}',
-      features ? JSON.stringify(features) : '[]',
-      compatibility || null,
-      package_contents ? JSON.stringify(package_contents) : '[]',
-      Number(shipping_weight_grams || 250),
-      Number(estimated_dispatch_days || 1),
-      warranty_info || '6 Months Warranty',
-      is_featured ? 1 : 0,
-      is_active !== undefined ? (is_active ? 1 : 0) : 1
-    );
+    // Begin database transaction for atomic multi-table write
+    db.exec('BEGIN TRANSACTION');
+    let productId: number;
+    try {
+      const result = db.prepare(`
+        INSERT INTO products (
+          name, slug, sku, category_id, subcategory, short_description, description,
+          regular_price, discounted_price, stock_quantity, brand, specifications_json,
+          features_json, compatibility, package_contents_json, shipping_weight_grams,
+          estimated_dispatch_days, warranty_info, is_featured, is_active, version, created_at, updated_at
+        ) VALUES (
+          ?, ?, ?, ?, ?, ?, ?,
+          ?, ?, ?, ?, ?,
+          ?, ?, ?, ?,
+          ?, ?, ?, ?, 1, datetime('now'), datetime('now')
+        )
+      `).run(
+        name.trim(),
+        cleanSlug,
+        cleanSku,
+        validCatId,
+        subcategory || null,
+        short_description || null,
+        description || name,
+        Number(regular_price),
+        (discounted_price !== undefined && discounted_price !== null && discounted_price !== '') ? Number(discounted_price) : null,
+        Number(stock_quantity || 0),
+        brand || 'VK Technology',
+        specifications ? JSON.stringify(specifications) : '{}',
+        features ? JSON.stringify(features) : '[]',
+        compatibility || null,
+        package_contents ? JSON.stringify(package_contents) : '[]',
+        Number(shipping_weight_grams || 250),
+        Number(estimated_dispatch_days || 1),
+        warranty_info || '6 Months Warranty',
+        is_featured ? 1 : 0,
+        is_active !== undefined ? (is_active ? 1 : 0) : 1
+      );
 
-    const productId = Number(result.lastInsertRowid);
+      productId = Number(result.lastInsertRowid);
 
-    // Insert images
-    if (Array.isArray(images) && images.length > 0) {
-      const imgInsert = db.prepare(`
-        INSERT INTO product_images (product_id, image_url, alt_text, sort_order, is_primary)
-        VALUES (?, ?, ?, ?, ?)
-      `);
-      images.forEach((img: string | { url: string }, idx: number) => {
-        const url = typeof img === 'string' ? img : img.url;
-        if (url) {
-          imgInsert.run(productId, url, name, idx, idx === 0 ? 1 : 0);
-        }
-      });
+      // Insert product images
+      if (Array.isArray(images) && images.length > 0) {
+        const imgInsert = db.prepare(`
+          INSERT INTO product_images (product_id, image_url, alt_text, sort_order, is_primary)
+          VALUES (?, ?, ?, ?, ?)
+        `);
+        images.forEach((img: string | { url?: string; image_url?: string }, idx: number) => {
+          const url = typeof img === 'string' ? img : (img.url || img.image_url);
+          if (url) {
+            imgInsert.run(productId, url, name, idx, idx === 0 ? 1 : 0);
+          }
+        });
+      }
+
+      // Record audit log
+      recordAuditLog(
+        req.user?.email || 'admin@vktechnology.shop',
+        'CREATE_PRODUCT',
+        'Product',
+        productId,
+        { name, sku: cleanSku, regular_price, category_id: validCatId }
+      );
+
+      db.exec('COMMIT');
+    } catch (txErr) {
+      try { db.exec('ROLLBACK'); } catch {}
+      throw txErr;
     }
 
-    // Broadcast real-time product creation to all connected accounts/devices
+    // Fetch the full newly created product record
+    const savedProduct = fetchFullProduct(productId);
+
+    // Broadcast real-time product creation to all connected accounts and devices
     try {
-      eventBroadcaster.broadcast('PRODUCT_CREATED', { id: productId, name, regular_price, stock_quantity });
+      eventBroadcaster.broadcast('PRODUCT_CREATED', savedProduct);
     } catch {}
 
     res.status(201).json({
       message: 'Product created successfully.',
-      productId
+      product: savedProduct,
+      productId,
+      updatedAt: savedProduct?.updated_at || new Date().toISOString(),
+      version: savedProduct?.version || 1
     });
   } catch (error: any) {
     console.error('Create product error:', error);
@@ -419,16 +498,17 @@ productsRouter.put('/:id', authenticateToken, requireAdmin, (req: AuthenticatedR
 
     const existingProduct = db.prepare('SELECT * FROM products WHERE id = ?').get(productId) as any;
 
-    let cleanSlug = slug;
-    if (!cleanSlug && existingProduct?.slug) {
-      cleanSlug = existingProduct.slug;
+    if (!existingProduct && !name) {
+      res.status(404).json({ error: 'Product not found.' });
+      return;
     }
+
+    let cleanSlug = slug;
+    if (!cleanSlug && existingProduct?.slug) cleanSlug = existingProduct.slug;
     if (!cleanSlug && name) {
       cleanSlug = name.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
     }
-    if (!cleanSlug) {
-      cleanSlug = `product-${productId}`;
-    }
+    if (!cleanSlug) cleanSlug = `product-${productId}`;
 
     let cleanSku = sku ? sku.trim().toUpperCase() : (existingProduct?.sku || `VK-${productId}`);
 
@@ -439,7 +519,7 @@ productsRouter.put('/:id', authenticateToken, requireAdmin, (req: AuthenticatedR
       if (firstCat) validCatId = firstCat.id;
     }
 
-    const finalName = name !== undefined ? name : (existingProduct?.name || 'Product');
+    const finalName = name !== undefined ? name.trim() : (existingProduct?.name || 'Product');
     const finalDesc = description !== undefined ? description : (existingProduct?.description || finalName);
     const finalCatId = validCatId;
     const finalBrand = brand !== undefined ? brand : (existingProduct?.brand || 'VK Technology');
@@ -466,109 +546,124 @@ productsRouter.put('/:id', authenticateToken, requireAdmin, (req: AuthenticatedR
     const finalFeatured = is_featured !== undefined ? (is_featured ? 1 : 0) : (existingProduct?.is_featured ? 1 : 0);
     const finalActive = is_active !== undefined ? (is_active ? 1 : 0) : (existingProduct?.is_active !== undefined ? (existingProduct.is_active ? 1 : 0) : 1);
 
-    const regPrice = Number(regular_price || 0);
-    const discPrice = (discounted_price !== undefined && discounted_price !== null && discounted_price !== '') 
-      ? Number(discounted_price) 
-      : null;
-
-    if (!existingProduct) {
-      // Upsert product if it doesn't exist in server database yet
-      db.prepare(`
-        INSERT INTO products (
-          id, name, slug, sku, category_id, subcategory, short_description, description,
-          regular_price, discounted_price, stock_quantity, brand, specifications_json,
-          features_json, compatibility, package_contents_json, shipping_weight_grams,
-          estimated_dispatch_days, warranty_info, is_featured, is_active, created_at, updated_at
-        ) VALUES (
-          ?, ?, ?, ?, ?, ?, ?, ?,
-          ?, ?, ?, ?, ?,
-          ?, ?, ?, ?,
-          ?, ?, ?, ?, datetime('now'), datetime('now')
-        )
-      `).run(
-        productId,
-        finalName,
-        cleanSlug,
-        cleanSku,
-        finalCatId,
-        finalSubcat,
-        finalShortDesc,
-        finalDesc,
-        finalRegPrice,
-        finalDiscPrice,
-        finalStock,
-        finalBrand,
-        finalSpecs,
-        finalFeatures,
-        finalCompat,
-        finalContents,
-        finalWeight,
-        finalDispatch,
-        finalWarranty,
-        finalFeatured,
-        finalActive
-      );
-    } else {
-      db.prepare(`
-        UPDATE products SET
-          name = ?, slug = ?, sku = ?, category_id = ?, subcategory = ?, short_description = ?, description = ?,
-          regular_price = ?, discounted_price = ?, stock_quantity = ?, brand = ?, specifications_json = ?,
-          features_json = ?, compatibility = ?, package_contents_json = ?, shipping_weight_grams = ?,
-          estimated_dispatch_days = ?, warranty_info = ?, is_featured = ?, is_active = ?, updated_at = datetime('now')
-        WHERE id = ?
-      `).run(
-        finalName,
-        cleanSlug,
-        cleanSku,
-        finalCatId,
-        finalSubcat,
-        finalShortDesc,
-        finalDesc,
-        finalRegPrice,
-        finalDiscPrice,
-        finalStock,
-        finalBrand,
-        finalSpecs,
-        finalFeatures,
-        finalCompat,
-        finalContents,
-        finalWeight,
-        finalDispatch,
-        finalWarranty,
-        finalFeatured,
-        finalActive,
-        productId
-      );
-    }
-
-    // Update images if provided
-    const allImages = Array.isArray(images) && images.length > 0 ? images : (primary_image ? [primary_image] : []);
-    if (allImages.length > 0) {
-      db.prepare('DELETE FROM product_images WHERE product_id = ?').run(productId);
-      const imgInsert = db.prepare(`
-        INSERT INTO product_images (product_id, image_url, alt_text, sort_order, is_primary)
-        VALUES (?, ?, ?, ?, ?)
-      `);
-      allImages.forEach((img: any, idx: number) => {
-        const url = typeof img === 'string' ? img : img.image_url || img.url;
-        if (url) {
-          imgInsert.run(productId, url, name, idx, idx === 0 ? 1 : 0);
-        }
-      });
-    }
-
-    // Broadcast real-time product update to all connected accounts/devices
+    // Atomic transaction for product update + images + audit logging
+    db.exec('BEGIN TRANSACTION');
     try {
-      eventBroadcaster.broadcast('PRODUCT_UPDATED', {
-        id: Number(productId),
-        name,
-        regular_price: regPrice,
-        discounted_price: discPrice,
-        stock_quantity: Number(stock_quantity || 0)
-      });
+      if (!existingProduct) {
+        db.prepare(`
+          INSERT INTO products (
+            id, name, slug, sku, category_id, subcategory, short_description, description,
+            regular_price, discounted_price, stock_quantity, brand, specifications_json,
+            features_json, compatibility, package_contents_json, shipping_weight_grams,
+            estimated_dispatch_days, warranty_info, is_featured, is_active, version, created_at, updated_at
+          ) VALUES (
+            ?, ?, ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, ?,
+            ?, ?, ?, ?,
+            ?, ?, ?, ?, 1, datetime('now'), datetime('now')
+          )
+        `).run(
+          productId,
+          finalName,
+          cleanSlug,
+          cleanSku,
+          finalCatId,
+          finalSubcat,
+          finalShortDesc,
+          finalDesc,
+          finalRegPrice,
+          finalDiscPrice,
+          finalStock,
+          finalBrand,
+          finalSpecs,
+          finalFeatures,
+          finalCompat,
+          finalContents,
+          finalWeight,
+          finalDispatch,
+          finalWarranty,
+          finalFeatured,
+          finalActive
+        );
+      } else {
+        db.prepare(`
+          UPDATE products SET
+            name = ?, slug = ?, sku = ?, category_id = ?, subcategory = ?, short_description = ?, description = ?,
+            regular_price = ?, discounted_price = ?, stock_quantity = ?, brand = ?, specifications_json = ?,
+            features_json = ?, compatibility = ?, package_contents_json = ?, shipping_weight_grams = ?,
+            estimated_dispatch_days = ?, warranty_info = ?, is_featured = ?, is_active = ?,
+            version = version + 1, updated_at = datetime('now')
+          WHERE id = ?
+        `).run(
+          finalName,
+          cleanSlug,
+          cleanSku,
+          finalCatId,
+          finalSubcat,
+          finalShortDesc,
+          finalDesc,
+          finalRegPrice,
+          finalDiscPrice,
+          finalStock,
+          finalBrand,
+          finalSpecs,
+          finalFeatures,
+          finalCompat,
+          finalContents,
+          finalWeight,
+          finalDispatch,
+          finalWarranty,
+          finalFeatured,
+          finalActive,
+          productId
+        );
+      }
+
+      // Update images if supplied
+      const allImages = Array.isArray(images) && images.length > 0 ? images : (primary_image ? [primary_image] : []);
+      if (allImages.length > 0) {
+        db.prepare('DELETE FROM product_images WHERE product_id = ?').run(productId);
+        const imgInsert = db.prepare(`
+          INSERT INTO product_images (product_id, image_url, alt_text, sort_order, is_primary)
+          VALUES (?, ?, ?, ?, ?)
+        `);
+        allImages.forEach((img: any, idx: number) => {
+          const url = typeof img === 'string' ? img : (img.image_url || img.url);
+          if (url) {
+            imgInsert.run(productId, url, finalName, idx, idx === 0 ? 1 : 0);
+          }
+        });
+      }
+
+      // Record audit log
+      recordAuditLog(
+        req.user?.email || 'admin@vktechnology.shop',
+        'UPDATE_PRODUCT',
+        'Product',
+        productId,
+        { name: finalName, price: finalRegPrice, stock: finalStock, active: finalActive }
+      );
+
+      db.exec('COMMIT');
+    } catch (txErr) {
+      try { db.exec('ROLLBACK'); } catch {}
+      throw txErr;
+    }
+
+    // Fetch the updated product record with all populated fields
+    const updatedProduct = fetchFullProduct(productId);
+
+    // Broadcast real-time product update to all connected accounts and devices
+    try {
+      eventBroadcaster.broadcast('PRODUCT_UPDATED', updatedProduct);
     } catch {}
 
-    res.json({ message: 'Product updated successfully.' });
+    res.json({
+      message: 'Product updated successfully.',
+      product: updatedProduct,
+      updatedAt: updatedProduct?.updated_at || new Date().toISOString(),
+      version: updatedProduct?.version || 1
+    });
   } catch (error: any) {
     console.error('Update product error:', error);
     res.status(500).json({ error: error.message || 'Failed to update product.' });
@@ -579,11 +674,42 @@ productsRouter.put('/:id', authenticateToken, requireAdmin, (req: AuthenticatedR
 productsRouter.patch('/:id/stock', authenticateToken, requireAdmin, (req: AuthenticatedRequest, res: Response) => {
   try {
     const { stock_quantity } = req.body;
-    db.prepare('UPDATE products SET stock_quantity = ?, updated_at = datetime(\'now\') WHERE id = ?').run(stock_quantity, req.params.id);
+    const productId = req.params.id;
+
+    if (stock_quantity === undefined || isNaN(Number(stock_quantity)) || Number(stock_quantity) < 0) {
+      res.status(400).json({ error: 'Valid stock quantity is required.' });
+      return;
+    }
+
+    db.prepare(`
+      UPDATE products 
+      SET stock_quantity = ?, version = version + 1, updated_at = datetime('now') 
+      WHERE id = ?
+    `).run(Number(stock_quantity), productId);
+
+    recordAuditLog(
+      req.user?.email || 'admin@vktechnology.shop',
+      'UPDATE_STOCK',
+      'Product',
+      productId,
+      { new_stock: stock_quantity }
+    );
+
+    const updatedProduct = fetchFullProduct(productId);
+
     try {
-      eventBroadcaster.broadcast('STOCK_CHANGED', { id: Number(req.params.id), stock_quantity: Number(stock_quantity) });
+      eventBroadcaster.broadcast('STOCK_CHANGED', {
+        product: updatedProduct,
+        id: Number(productId),
+        stock_quantity: Number(stock_quantity)
+      });
     } catch {}
-    res.json({ message: 'Stock updated.' });
+
+    res.json({
+      message: 'Stock updated successfully.',
+      product: updatedProduct,
+      updatedAt: updatedProduct?.updated_at || new Date().toISOString()
+    });
   } catch (error: any) {
     res.status(500).json({ error: 'Failed to update stock.' });
   }
@@ -593,32 +719,108 @@ productsRouter.patch('/:id/stock', authenticateToken, requireAdmin, (req: Authen
 productsRouter.patch('/:id/status', authenticateToken, requireAdmin, (req: AuthenticatedRequest, res: Response) => {
   try {
     const { is_active } = req.body;
-    db.prepare('UPDATE products SET is_active = ?, updated_at = datetime(\'now\') WHERE id = ?').run(is_active ? 1 : 0, req.params.id);
+    const productId = req.params.id;
+
+    db.prepare(`
+      UPDATE products 
+      SET is_active = ?, version = version + 1, updated_at = datetime('now') 
+      WHERE id = ?
+    `).run(is_active ? 1 : 0, productId);
+
+    recordAuditLog(
+      req.user?.email || 'admin@vktechnology.shop',
+      is_active ? 'PUBLISH_PRODUCT' : 'UNPUBLISH_PRODUCT',
+      'Product',
+      productId,
+      { is_active: !!is_active }
+    );
+
+    const updatedProduct = fetchFullProduct(productId);
+
     try {
-      eventBroadcaster.broadcast('PRODUCT_UPDATED', { id: Number(req.params.id), is_active: !!is_active });
+      eventBroadcaster.broadcast('PRODUCT_UPDATED', {
+        product: updatedProduct,
+        id: Number(productId),
+        is_active: !!is_active
+      });
     } catch {}
-    res.json({ message: `Product ${is_active ? 'published' : 'unpublished'}.` });
+
+    res.json({
+      message: `Product ${is_active ? 'published' : 'unpublished'} successfully.`,
+      product: updatedProduct,
+      updatedAt: updatedProduct?.updated_at || new Date().toISOString()
+    });
   } catch (error: any) {
     res.status(500).json({ error: 'Failed to update status.' });
   }
 });
 
-// Admin: Delete product
+// Admin: Delete product (with foreign key protection for orders)
 productsRouter.delete('/:id', authenticateToken, requireAdmin, (req: AuthenticatedRequest, res: Response) => {
   try {
     const productId = req.params.id;
+
+    // Safety rule: Never delete product if existing orders reference it
+    const orderRef = db.prepare('SELECT COUNT(*) as count FROM order_items WHERE product_id = ?').get(productId) as any;
+    if (orderRef && orderRef.count > 0) {
+      // Soft-delete: unpublish product to preserve customer order history
+      db.prepare(`
+        UPDATE products 
+        SET is_active = 0, version = version + 1, updated_at = datetime('now') 
+        WHERE id = ?
+      `).run(productId);
+
+      recordAuditLog(
+        req.user?.email || 'admin@vktechnology.shop',
+        'ARCHIVE_PRODUCT_IN_ORDERS',
+        'Product',
+        productId,
+        { reason: 'Product referenced in existing order history, unpublished safely' }
+      );
+
+      try {
+        eventBroadcaster.broadcast('PRODUCT_DELETED', { id: Number(productId) });
+      } catch {}
+
+      res.json({
+        message: 'Product is referenced in customer orders. It has been safely archived and unpublished from the public storefront.',
+        productId: Number(productId),
+        timestamp: new Date().toISOString()
+      });
+      return;
+    }
+
+    // Atomic transaction for complete cascade removal
+    db.exec('BEGIN TRANSACTION');
     try {
       db.prepare('DELETE FROM product_images WHERE product_id = ?').run(productId);
       db.prepare('DELETE FROM cart_items WHERE product_id = ?').run(productId);
-      db.prepare('DELETE FROM wishlist WHERE product_id = ?').run(productId);
+      db.prepare('DELETE FROM wishlists WHERE product_id = ?').run(productId);
       db.prepare('DELETE FROM reviews WHERE product_id = ?').run(productId);
-    } catch (e) {}
+      db.prepare('DELETE FROM products WHERE id = ?').run(productId);
 
-    db.prepare('DELETE FROM products WHERE id = ?').run(productId);
+      recordAuditLog(
+        req.user?.email || 'admin@vktechnology.shop',
+        'DELETE_PRODUCT',
+        'Product',
+        productId
+      );
+
+      db.exec('COMMIT');
+    } catch (txErr) {
+      try { db.exec('ROLLBACK'); } catch {}
+      throw txErr;
+    }
+
     try {
       eventBroadcaster.broadcast('PRODUCT_DELETED', { id: Number(productId) });
     } catch {}
-    res.json({ message: 'Product deleted successfully.' });
+
+    res.json({
+      message: 'Product deleted successfully.',
+      productId: Number(productId),
+      timestamp: new Date().toISOString()
+    });
   } catch (error: any) {
     console.error('Delete product error:', error);
     res.status(500).json({ error: error.message || 'Failed to delete product.' });

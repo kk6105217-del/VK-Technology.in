@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 import { CartItem, Coupon, Product } from '../types';
 import { api, getGuestId } from '../services/api';
 import { useAuth } from './AuthContext';
+import { useCatalogSync } from '../hooks/useCatalogSync';
 
 interface CartContextType {
   items: CartItem[];
@@ -48,6 +49,11 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     refreshCart();
   }, [user]);
+
+  // Synchronize cart with real-time product price and stock modifications
+  useCatalogSync(() => {
+    refreshCart();
+  });
 
   const addToCart = async (product: Product, quantity: number = 1) => {
     await api.cart.addItem(product.id, quantity);

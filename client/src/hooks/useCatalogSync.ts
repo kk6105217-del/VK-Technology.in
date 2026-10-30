@@ -1,26 +1,28 @@
 import { useEffect } from 'react';
-import { realtimeSync } from '../services/realtime';
+import { realtimeSync, CatalogEvent } from '../services/realtime';
 
-export function useCatalogSync(onUpdate: () => void, deps: any[] = []) {
+export function useCatalogSync(onUpdate: (event?: CatalogEvent) => void, deps: any[] = []) {
   useEffect(() => {
-    // Listen to real-time events from SSE
+    // Listen to real-time events from SSE, BroadcastChannel, and sync status checks
     const unsubscribe = realtimeSync.subscribe((event) => {
-      // Trigger update on catalog modifications or periodic sync ticks
       if (
         event.type === 'PRODUCT_UPDATED' ||
         event.type === 'PRODUCT_CREATED' ||
         event.type === 'PRODUCT_DELETED' ||
         event.type === 'PRICE_CHANGED' ||
         event.type === 'STOCK_CHANGED' ||
-        event.type === 'TAB_FOCUSED'
+        event.type === 'CATEGORY_UPDATED' ||
+        event.type === 'CATALOG_CHANGED' ||
+        event.type === 'TAB_FOCUSED' ||
+        event.type === 'NETWORK_ONLINE'
       ) {
-        onUpdate();
+        onUpdate(event);
       }
     });
 
-    // Also listen to window custom event
-    const handleWindowEvent = () => {
-      onUpdate();
+    // Also listen to window custom event for broad compatibility
+    const handleWindowEvent = (e: any) => {
+      onUpdate(e?.detail);
     };
     window.addEventListener('vk_catalog_updated', handleWindowEvent);
 

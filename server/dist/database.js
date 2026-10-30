@@ -5,6 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.db = void 0;
 exports.initDatabase = initDatabase;
+exports.recordAuditLog = recordAuditLog;
 const os_1 = __importDefault(require("os"));
 const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
@@ -142,6 +143,7 @@ function initDatabase() {
       rating_count INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      version INTEGER NOT NULL DEFAULT 1,
       FOREIGN KEY(category_id) REFERENCES categories(id) ON DELETE RESTRICT
     );
 
@@ -340,10 +342,26 @@ function initDatabase() {
             exports.db.exec(`ALTER TABLE orders ADD COLUMN payment_screenshot TEXT;`);
         }
         catch (e) { }
+        try {
+            exports.db.exec(`ALTER TABLE products ADD COLUMN version INTEGER NOT NULL DEFAULT 1;`);
+        }
+        catch (e) { }
         seedInitialData();
     }
     catch (err) {
         console.warn('[DB] Non-critical warning in initDatabase:', err);
+    }
+}
+function recordAuditLog(adminEmail, action, targetType, targetId, details) {
+    try {
+        const detailsStr = typeof details === 'string' ? details : (details ? JSON.stringify(details) : null);
+        exports.db.prepare(`
+      INSERT INTO admin_audit_logs (admin_email, action, target_type, target_id, details, created_at)
+      VALUES (?, ?, ?, ?, ?, datetime('now'))
+    `).run(adminEmail, action, targetType, String(targetId), detailsStr);
+    }
+    catch (err) {
+        console.warn('[AuditLog] Failed to record log:', err);
     }
 }
 function seedInitialData() {

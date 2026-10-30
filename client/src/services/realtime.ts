@@ -1,11 +1,25 @@
 /**
  * Real-time Live Catalog Synchronization for VK Technology
- * Listens to Server-Sent Events (SSE) from /api/events and broadcasts
- * live updates across all open tabs, windows, and devices.
- * Includes automatic reconnect and visibility-based polling fallback.
+ * Synchronizes product, category, pricing, and inventory updates across
+ * all active browser tabs, accounts, windows, and remote devices.
+ * 
+ * Supports:
+ * 1. Server-Sent Events (SSE) from /api/events with auto-reconnect
+ * 2. Cross-tab BroadcastChannel for zero-latency local tab synchronization
+ * 3. Visibility-based refetching when user returns to tab
+ * 4. Offline-to-online reconnection synchronization
+ * 5. Periodic polling fallback via /api/products/sync/status
  */
 
-type CatalogUpdateListener = (event: { type: string; data: any }) => void;
+export interface CatalogEvent {
+  type: string;
+  data?: any;
+  catalogVersion?: number;
+  catalogTimestamp?: string;
+  timestamp?: number | string;
+}
+
+type CatalogUpdateListener = (event: CatalogEvent) => void;
 
 class RealtimeSyncManager {
   private eventSource: EventSource | null = null;
@@ -13,6 +27,9 @@ class RealtimeSyncManager {
   private reconnectTimer: any = null;
   private pollTimer: any = null;
   private isConnected = false;
+  private channel: BroadcastChannel | null = null;
+  private lastKnownVersion = 0;
+  private lastKnownTimestamp = '';
 
   constructor() {
     this.init();
@@ -20,24 +37,48 @@ class RealtimeSyncManager {
 
   private init() {
     if (typeof window === 'undefined') return;
+
+    // 1. Cross-tab BroadcastChannel
+    if (typeof BroadcastChannel !== 'undefined') {
+      try {
+        this.channel = new BroadcastChannel('vk_catalog_channel');
+        this.channel.onmessage = (e) => {
+          if (e.data && e.data.type) {
+            this.dispatchToListeners(e.data);
+          }
+        };
+      } catch (err) {
+        console.warn('[Realtime] BroadcastChannel unavailable:', err);
+      }
+    }
+
+    // 2. Connect to server SSE
     this.connect();
 
-    // Re-sync when user switches back to this browser tab
-    window.addEventListener('visibilitychange', () => {
+    // 3. Tab visibility change: immediately re-verify sync status when focused
+    document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible') {
-        this.notify('TAB_FOCUSED', {});
+        this.checkSyncStatus();
+        this.dispatchToListeners({ type: 'TAB_FOCUSED' });
         if (!this.isConnected) {
           this.connect();
         }
       }
     });
 
-    // Background polling fallback every 25 seconds
+    // 4. Online event: re-synchronize catalog when device reconnects to internet
+    window.addEventListener('online', () => {
+      this.checkSyncStatus();
+      this.dispatchToListeners({ type: 'NETWORK_ONLINE' });
+      this.connect();
+    });
+
+    // 5. Polling fallback every 10 seconds via lightweight status endpoint
     this.pollTimer = setInterval(() => {
-      if (document.visibilityState === 'visible') {
-        this.notify('POLL_TICK', {});
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        this.checkSyncStatus();
       }
-    }, 25000);
+    }, 10000);
   }
 
   private connect() {
@@ -66,7 +107,20 @@ class RealtimeSyncManager {
         try {
           const payload = JSON.parse(e.data);
           if (payload.type && payload.type !== 'CONNECTED') {
-            this.notify(payload.type, payload.data);
+            if (payload.catalogVersion) {
+              this.lastKnownVersion = payload.catalogVersion;
+            }
+            if (payload.catalogTimestamp) {
+              this.lastKnownTimestamp = payload.catalogTimestamp;
+            }
+            this.dispatchToListeners(payload);
+          } else if (payload.type === 'CONNECTED') {
+            if (payload.catalogVersion) {
+              this.lastKnownVersion = payload.catalogVersion;
+            }
+            if (payload.lastCatalogUpdate) {
+              this.lastKnownTimestamp = payload.lastCatalogUpdate;
+            }
           }
         } catch (err) {
           console.warn('[Realtime] Parse error:', err);
@@ -85,12 +139,42 @@ class RealtimeSyncManager {
           this.reconnectTimer = setTimeout(() => {
             this.reconnectTimer = null;
             this.connect();
-          }, 5000);
+          }, 4000);
         }
       };
-    } catch (err) {
+    } catch {
       this.isConnected = false;
     }
+  }
+
+  public async checkSyncStatus() {
+    try {
+      const apiBase = (import.meta as any).env?.VITE_API_URL || '/api';
+      const res = await fetch(`${apiBase}/products/sync/status`, {
+        cache: 'no-store',
+        headers: {
+          'Cache-Control': 'no-cache',
+          'Pragma': 'no-cache'
+        }
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data?.catalogVersion) {
+        if (this.lastKnownVersion > 0 && data.catalogVersion !== this.lastKnownVersion) {
+          this.lastKnownVersion = data.catalogVersion;
+          this.lastKnownTimestamp = data.lastUpdated || '';
+          this.dispatchToListeners({
+            type: 'CATALOG_CHANGED',
+            data,
+            catalogVersion: data.catalogVersion,
+            catalogTimestamp: data.lastUpdated
+          });
+        } else {
+          this.lastKnownVersion = data.catalogVersion;
+          this.lastKnownTimestamp = data.lastUpdated || '';
+        }
+      }
+    } catch {}
   }
 
   subscribe(listener: CatalogUpdateListener) {
@@ -100,11 +184,28 @@ class RealtimeSyncManager {
     };
   }
 
-  notify(type: string, data: any) {
-    // Notify all in-memory subscribers
+  notify(type: string, data: any = {}) {
+    const eventObj: CatalogEvent = {
+      type,
+      data,
+      timestamp: Date.now()
+    };
+
+    // 1. Notify in-memory listeners in this window
+    this.dispatchToListeners(eventObj);
+
+    // 2. Broadcast across tabs/windows via BroadcastChannel
+    if (this.channel) {
+      try {
+        this.channel.postMessage(eventObj);
+      } catch {}
+    }
+  }
+
+  private dispatchToListeners(event: CatalogEvent) {
     this.listeners.forEach((fn) => {
       try {
-        fn({ type, data });
+        fn(event);
       } catch (e) {
         console.error('[Realtime] Listener callback error:', e);
       }
@@ -114,7 +215,7 @@ class RealtimeSyncManager {
     try {
       window.dispatchEvent(
         new CustomEvent('vk_catalog_updated', {
-          detail: { type, data, timestamp: Date.now() }
+          detail: event
         })
       );
     } catch {}

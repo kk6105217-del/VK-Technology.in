@@ -11,9 +11,10 @@ __pycache__/
 .pytest_cache/
 
 # Production build outputs
-dist/
+/dist/
 client/dist/
 frontend/dist/
+!server/dist/
 !server/dist/**
 
 # Local Environment Variables (secrets)

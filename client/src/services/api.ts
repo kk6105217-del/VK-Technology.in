@@ -58,6 +58,12 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
     ...(options.headers as Record<string, string> || {}),
   };
 
+  // Prevent browser & proxy stale caching on GET queries
+  if (!options.method || options.method.toUpperCase() === 'GET') {
+    headers['Cache-Control'] = 'no-cache, no-store, must-revalidate';
+    headers['Pragma'] = 'no-cache';
+  }
+
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
   }
@@ -455,171 +461,72 @@ export const api = {
   // Categories
   categories: {
     getAll: async () => {
-      let serverCats: Category[] = [];
       try {
         const res = await request<{ categories: Category[] }>('/categories');
         if (Array.isArray(res?.categories)) {
-          serverCats = res.categories;
+          return res;
         }
+        return { categories: FALLBACK_CATEGORIES };
       } catch (err) {
-        console.warn('API /categories unavailable, falling back:', err);
+        console.warn('API /categories fetch error:', err);
+        return { categories: FALLBACK_CATEGORIES };
       }
-
-      const custom: Category[] = JSON.parse(localStorage.getItem('vk_custom_categories') || '[]');
-      const deleted: number[] = JSON.parse(localStorage.getItem('vk_deleted_categories') || '[]');
-
-      let all = serverCats.length > 0
-        ? [...custom, ...serverCats.filter(sc => !custom.some(cc => cc.id === sc.id))]
-        : [...custom, ...FALLBACK_CATEGORIES.filter(fc => !custom.some(cc => cc.id === fc.id))];
-
-      all = all.filter(c => !deleted.includes(Number(c.id)) && c.is_active);
-      return { categories: all };
     },
     getAdminAll: async () => {
-      let serverCats: Category[] = [];
       try {
         const res = await request<{ categories: Category[] }>('/categories/all');
         if (Array.isArray(res?.categories)) {
-          serverCats = res.categories;
+          return res;
         }
+        return { categories: FALLBACK_CATEGORIES };
       } catch (err) {
-        console.warn('API /categories/all unavailable, falling back:', err);
+        console.warn('API /categories/all fetch error:', err);
+        return { categories: FALLBACK_CATEGORIES };
       }
-
-      const custom: Category[] = JSON.parse(localStorage.getItem('vk_custom_categories') || '[]');
-      const deleted: number[] = JSON.parse(localStorage.getItem('vk_deleted_categories') || '[]');
-
-      let all = serverCats.length > 0
-        ? [...custom, ...serverCats.filter(sc => !custom.some(cc => cc.id === sc.id))]
-        : [...custom, ...FALLBACK_CATEGORIES.filter(fc => !custom.some(cc => cc.id === fc.id))];
-
-      all = all.filter(c => !deleted.includes(Number(c.id)));
-      return { categories: all };
     },
     getBySlug: async (slug: string) => {
-      const deleted: number[] = JSON.parse(localStorage.getItem('vk_deleted_categories') || '[]');
-      const custom: Category[] = JSON.parse(localStorage.getItem('vk_custom_categories') || '[]');
-
-      const customFound = custom.find(c => c.slug === slug);
-      if (customFound) {
-        if (deleted.includes(Number(customFound.id))) throw new Error('Category not found');
-        return { category: customFound };
-      }
-
       try {
         const res = await request<{ category: Category }>(`/categories/${slug}`);
         if (res?.category) {
-          if (deleted.includes(Number(res.category.id))) throw new Error('Category not found');
-          const override = custom.find(cc => cc.id === res.category.id);
-          return { category: override || res.category };
+          return res;
         }
         throw new Error('Category not found');
       } catch (err) {
         const found = FALLBACK_CATEGORIES.find(c => c.slug === slug);
         if (found) {
-          if (deleted.includes(Number(found.id))) throw new Error('Category not found');
-          const customOverride = custom.find(cc => cc.id === found.id);
-          return { category: customOverride || found };
+          return { category: found };
         }
         throw err;
       }
     },
     create: async (category: Partial<Category>) => {
-      let newId = Date.now();
+      const res = await request<{ message: string; category?: Category; id: number }>('/categories', {
+        method: 'POST',
+        body: JSON.stringify(category)
+      });
       try {
-        const res = await request<{ message: string; id: number }>('/categories', {
-          method: 'POST',
-          body: JSON.stringify(category)
-        });
-        if (res?.id) newId = res.id;
-      } catch (err) {
-        console.warn('Server create category error, saving locally:', err);
-      }
-
-      const newCat: Category = {
-        id: newId,
-        name: category.name || 'New Category',
-        slug: category.slug || `category-${newId}`,
-        description: category.description || '',
-        icon: category.icon || 'Cpu',
-        image_url: category.image_url || 'https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=600&q=80',
-        sort_order: Number(category.sort_order || 1),
-        is_active: category.is_active !== undefined ? category.is_active : 1
-      };
-
-      const custom: Category[] = JSON.parse(localStorage.getItem('vk_custom_categories') || '[]');
-      custom.push(newCat);
-      localStorage.setItem('vk_custom_categories', JSON.stringify(custom));
-
-      return { message: 'Category created successfully.', id: newId };
+        realtimeSync.notify('CATEGORY_UPDATED', res);
+      } catch {}
+      return res;
     },
     update: async (id: number, category: Partial<Category>) => {
+      const res = await request<{ message: string; category?: Category }>(`/categories/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(category)
+      });
       try {
-        await request<{ message: string }>(`/categories/${id}`, {
-          method: 'PUT',
-          body: JSON.stringify(category)
-        });
-      } catch (err) {
-        console.warn('Server update category error, saving locally:', err);
-      }
-
-      const custom: Category[] = JSON.parse(localStorage.getItem('vk_custom_categories') || '[]');
-      const idx = custom.findIndex(c => Number(c.id) === Number(id));
-      if (idx !== -1) {
-        custom[idx] = { ...custom[idx], ...category };
-      } else {
-        const fallback = FALLBACK_CATEGORIES.find(c => Number(c.id) === Number(id));
-        if (fallback) {
-          custom.push({ ...fallback, ...category });
-        } else {
-          custom.push({
-            id,
-            name: category.name || 'Category',
-            slug: category.slug || `category-${id}`,
-            description: category.description || '',
-            icon: category.icon || 'Cpu',
-            image_url: category.image_url || '',
-            sort_order: Number(category.sort_order || 1),
-            is_active: category.is_active !== undefined ? category.is_active : 1,
-            ...category
-          });
-        }
-      }
-      localStorage.setItem('vk_custom_categories', JSON.stringify(custom));
-      return { message: 'Category updated successfully.' };
+        realtimeSync.notify('CATEGORY_UPDATED', { id, ...category, ...res });
+      } catch {}
+      return res;
     },
     delete: async (id: number) => {
-      try {
-        await request<{ message: string }>(`/categories/${id}`, {
-          method: 'DELETE'
-        });
-      } catch (err) {
-        console.warn('Server category delete error or offline:', err);
-      }
-
-      const deleted: number[] = JSON.parse(localStorage.getItem('vk_deleted_categories') || '[]');
-      if (!deleted.includes(Number(id))) {
-        deleted.push(Number(id));
-        localStorage.setItem('vk_deleted_categories', JSON.stringify(deleted));
-      }
-
-      const custom: Category[] = JSON.parse(localStorage.getItem('vk_custom_categories') || '[]');
-      const filtered = custom.filter(c => Number(c.id) !== Number(id));
-      localStorage.setItem('vk_custom_categories', JSON.stringify(filtered));
-
-      const customProducts: Product[] = JSON.parse(localStorage.getItem('vk_custom_products') || '[]');
-      let prodUpdated = false;
-      customProducts.forEach(p => {
-        if (Number(p.category_id) === Number(id)) {
-          p.category_id = 1;
-          prodUpdated = true;
-        }
+      const res = await request<{ message: string }>(`/categories/${id}`, {
+        method: 'DELETE'
       });
-      if (prodUpdated) {
-        localStorage.setItem('vk_custom_products', JSON.stringify(customProducts));
-      }
-
-      return { message: 'Category deleted successfully.' };
+      try {
+        realtimeSync.notify('CATEGORY_UPDATED', { id, deleted: true });
+      } catch {}
+      return res;
     },
   },
 
@@ -708,53 +615,53 @@ export const api = {
       }
     },
     create: async (product: any) => {
-      const res = await request<{ message: string; productId: number }>('/products', {
+      const res = await request<{ message: string; productId: number; product?: Product; updatedAt?: string; version?: number }>('/products', {
         method: 'POST',
         body: JSON.stringify(product)
       });
       // Broadcast live event across all windows and devices
       try {
-        realtimeSync.notify('PRODUCT_CREATED', { productId: res?.productId });
+        realtimeSync.notify('PRODUCT_CREATED', res);
       } catch {}
       return res;
     },
     update: async (id: number, product: any) => {
-      const res = await request<{ message: string }>(`/products/${id}`, {
+      const res = await request<{ message: string; product?: Product; updatedAt?: string; version?: number }>(`/products/${id}`, {
         method: 'PUT',
         body: JSON.stringify(product)
       });
       // Broadcast live event across all windows and devices
       try {
-        realtimeSync.notify('PRODUCT_UPDATED', { id, ...product });
+        realtimeSync.notify('PRODUCT_UPDATED', { id, ...product, ...res });
       } catch {}
       return res;
     },
     updateStock: async (id: number, stock_quantity: number) => {
-      const res = await request<{ message: string }>(`/products/${id}/stock`, {
+      const res = await request<{ message: string; product?: Product; updatedAt?: string }>(`/products/${id}/stock`, {
         method: 'PATCH',
         body: JSON.stringify({ stock_quantity })
       });
       try {
-        realtimeSync.notify('STOCK_CHANGED', { id, stock_quantity });
+        realtimeSync.notify('STOCK_CHANGED', { id, stock_quantity, ...res });
       } catch {}
       return res;
     },
     toggleStatus: async (id: number, is_active: boolean) => {
-      const res = await request<{ message: string }>(`/products/${id}/status`, {
+      const res = await request<{ message: string; product?: Product; updatedAt?: string }>(`/products/${id}/status`, {
         method: 'PATCH',
         body: JSON.stringify({ is_active })
       });
       try {
-        realtimeSync.notify('PRODUCT_UPDATED', { id, is_active });
+        realtimeSync.notify('PRODUCT_UPDATED', { id, is_active, ...res });
       } catch {}
       return res;
     },
     delete: async (id: number) => {
-      const res = await request<{ message: string }>(`/products/${id}`, {
+      const res = await request<{ message: string; productId?: number; timestamp?: string }>(`/products/${id}`, {
         method: 'DELETE'
       });
       try {
-        realtimeSync.notify('PRODUCT_DELETED', { id });
+        realtimeSync.notify('PRODUCT_DELETED', { id: Number(id), ...res });
       } catch {}
       return res;
     },
