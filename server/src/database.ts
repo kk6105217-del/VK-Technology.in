@@ -352,16 +352,28 @@ export function recordAuditLog(adminEmail: string, action: string, targetType: s
 
 function seedInitialData() {
   try {
-  // 1. Ensure Admin Account exists
-  const existingAdmin = db.prepare('SELECT id FROM users WHERE email = ?').get(config.adminEmail);
-  if (!existingAdmin) {
-    const salt = bcrypt.genSaltSync(10);
-    const hash = bcrypt.hashSync(config.adminInitialPassword, salt);
-    db.prepare(`
-      INSERT INTO users (email, password_hash, full_name, phone, role)
-      VALUES (?, ?, ?, ?, 'admin')
-    `).run(config.adminEmail, hash, 'Karthik Suroju (VK Technology)', '+919876543210');
-    console.log(`Admin user created: ${config.adminEmail}`);
+  // 1. Ensure Admin Accounts exist
+  const adminList = [
+    { email: 'admin@vktechnology.shop', name: 'Karthik Suroju (VK Technology)' },
+    { email: 'karthik.suroju@gmail.com', name: 'Karthik Suroju (VK Technology)' },
+    { email: config.adminEmail, name: 'Karthik Suroju (VK Technology)' }
+  ];
+
+  for (const adm of adminList) {
+    if (!adm.email) continue;
+    const existingAdmin = db.prepare('SELECT id, password_hash FROM users WHERE email = ?').get(adm.email) as any;
+    if (!existingAdmin) {
+      const salt = bcrypt.genSaltSync(10);
+      const hash = bcrypt.hashSync(config.adminInitialPassword || 'Admin@VK2026!', salt);
+      db.prepare(`
+        INSERT INTO users (email, password_hash, full_name, phone, role)
+        VALUES (?, ?, ?, ?, 'admin')
+      `).run(adm.email, hash, adm.name, '+918555997052');
+      console.log(`Admin user created: ${adm.email}`);
+    } else {
+      // Ensure role is admin
+      db.prepare(`UPDATE users SET role = 'admin' WHERE id = ?`).run(existingAdmin.id);
+    }
   }
 
   // 2. Ensure Website Settings exist

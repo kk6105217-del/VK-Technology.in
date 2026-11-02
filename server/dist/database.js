@@ -366,16 +366,29 @@ function recordAuditLog(adminEmail, action, targetType, targetId, details) {
 }
 function seedInitialData() {
     try {
-        // 1. Ensure Admin Account exists
-        const existingAdmin = exports.db.prepare('SELECT id FROM users WHERE email = ?').get(config_js_1.config.adminEmail);
-        if (!existingAdmin) {
-            const salt = bcryptjs_1.default.genSaltSync(10);
-            const hash = bcryptjs_1.default.hashSync(config_js_1.config.adminInitialPassword, salt);
-            exports.db.prepare(`
-      INSERT INTO users (email, password_hash, full_name, phone, role)
-      VALUES (?, ?, ?, ?, 'admin')
-    `).run(config_js_1.config.adminEmail, hash, 'Karthik Suroju (VK Technology)', '+919876543210');
-            console.log(`Admin user created: ${config_js_1.config.adminEmail}`);
+        // 1. Ensure Admin Accounts exist
+        const adminList = [
+            { email: 'admin@vktechnology.shop', name: 'Karthik Suroju (VK Technology)' },
+            { email: 'karthik.suroju@gmail.com', name: 'Karthik Suroju (VK Technology)' },
+            { email: config_js_1.config.adminEmail, name: 'Karthik Suroju (VK Technology)' }
+        ];
+        for (const adm of adminList) {
+            if (!adm.email)
+                continue;
+            const existingAdmin = exports.db.prepare('SELECT id, password_hash FROM users WHERE email = ?').get(adm.email);
+            if (!existingAdmin) {
+                const salt = bcryptjs_1.default.genSaltSync(10);
+                const hash = bcryptjs_1.default.hashSync(config_js_1.config.adminInitialPassword || 'Admin@VK2026!', salt);
+                exports.db.prepare(`
+        INSERT INTO users (email, password_hash, full_name, phone, role)
+        VALUES (?, ?, ?, ?, 'admin')
+      `).run(adm.email, hash, adm.name, '+918555997052');
+                console.log(`Admin user created: ${adm.email}`);
+            }
+            else {
+                // Ensure role is admin
+                exports.db.prepare(`UPDATE users SET role = 'admin' WHERE id = ?`).run(existingAdmin.id);
+            }
         }
         // 2. Ensure Website Settings exist
         const defaultSettings = {
