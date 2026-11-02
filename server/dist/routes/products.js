@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.productsRouter = void 0;
+exports.handleAdminProductsList = handleAdminProductsList;
 const express_1 = require("express");
 const database_js_1 = require("../database.js");
 const auth_js_1 = require("../middleware/auth.js");
@@ -64,8 +65,61 @@ exports.productsRouter.get('/sync/status', (req, res) => {
         totalProducts: totalRow?.count || 0
     });
 });
+// Handler for administrative product listing (supports /api/admin/products and /api/products/admin/all)
+function handleAdminProductsList(req, res) {
+    try {
+        (0, cache_js_1.setPrivateCacheControl)(res);
+        const { search, category, status } = req.query;
+        let conditions = ['1=1'];
+        let params = [];
+        if (search && typeof search === 'string') {
+            conditions.push('(p.name LIKE ? OR p.sku LIKE ?)');
+            params.push(`%${search}%`, `%${search}%`);
+        }
+        if (category) {
+            conditions.push('p.category_id = ?');
+            params.push(category);
+        }
+        if (status === 'active')
+            conditions.push('p.is_active = 1');
+        if (status === 'inactive')
+            conditions.push('p.is_active = 0');
+        if (status === 'low_stock')
+            conditions.push('p.stock_quantity <= 5 AND p.stock_quantity > 0');
+        if (status === 'out_of_stock')
+            conditions.push('p.stock_quantity = 0');
+        const sql = `
+      SELECT 
+        p.*,
+        c.name as category_name,
+        (
+          SELECT image_url FROM product_images pi 
+          WHERE pi.product_id = p.id 
+          ORDER BY pi.is_primary DESC, pi.sort_order ASC 
+          LIMIT 1
+        ) as primary_image
+      FROM products p
+      LEFT JOIN categories c ON p.category_id = c.id
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY p.id DESC
+    `;
+        const products = database_js_1.db.prepare(sql).all(...params);
+        res.json({ products });
+    }
+    catch (error) {
+        res.status(500).json({ error: 'Failed to fetch admin products.' });
+    }
+}
 // Public: Get all products with search, filters, pagination, and sorting
 exports.productsRouter.get('/', (req, res) => {
+    // If invoked via /api/admin/products route, delegate directly to admin handler
+    if (req.baseUrl.includes('admin')) {
+        return (0, auth_js_1.authenticateToken)(req, res, () => {
+            (0, auth_js_1.requireAdmin)(req, res, () => {
+                handleAdminProductsList(req, res);
+            });
+        });
+    }
     try {
         const syncStatus = events_js_1.eventBroadcaster.getCatalogSyncStatus();
         (0, cache_js_1.setDynamicCacheControl)(res, syncStatus.catalogVersion, syncStatus.lastUpdated);
@@ -207,50 +261,7 @@ exports.productsRouter.get('/', (req, res) => {
     }
 });
 // Admin: Get all products (including inactive) with inventory status
-exports.productsRouter.get('/admin/all', auth_js_1.authenticateToken, auth_js_1.requireAdmin, (req, res) => {
-    try {
-        (0, cache_js_1.setPrivateCacheControl)(res);
-        const { search, category, status } = req.query;
-        let conditions = ['1=1'];
-        let params = [];
-        if (search && typeof search === 'string') {
-            conditions.push('(p.name LIKE ? OR p.sku LIKE ?)');
-            params.push(`%${search}%`, `%${search}%`);
-        }
-        if (category) {
-            conditions.push('p.category_id = ?');
-            params.push(category);
-        }
-        if (status === 'active')
-            conditions.push('p.is_active = 1');
-        if (status === 'inactive')
-            conditions.push('p.is_active = 0');
-        if (status === 'low_stock')
-            conditions.push('p.stock_quantity <= 5 AND p.stock_quantity > 0');
-        if (status === 'out_of_stock')
-            conditions.push('p.stock_quantity = 0');
-        const sql = `
-      SELECT 
-        p.*,
-        c.name as category_name,
-        (
-          SELECT image_url FROM product_images pi 
-          WHERE pi.product_id = p.id 
-          ORDER BY pi.is_primary DESC, pi.sort_order ASC 
-          LIMIT 1
-        ) as primary_image
-      FROM products p
-      LEFT JOIN categories c ON p.category_id = c.id
-      WHERE ${conditions.join(' AND ')}
-      ORDER BY p.id DESC
-    `;
-        const products = database_js_1.db.prepare(sql).all(...params);
-        res.json({ products });
-    }
-    catch (error) {
-        res.status(500).json({ error: 'Failed to fetch admin products.' });
-    }
-});
+exports.productsRouter.get('/admin/all', auth_js_1.authenticateToken, auth_js_1.requireAdmin, handleAdminProductsList);
 // Public: Get single product by slug or id
 exports.productsRouter.get('/:slug', (req, res) => {
     try {

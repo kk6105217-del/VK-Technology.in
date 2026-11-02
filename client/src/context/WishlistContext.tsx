@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 import { Product } from '../types';
 import { api } from '../services/api';
 import { useAuth } from './AuthContext';
+import { useCatalogSync } from '../hooks/useCatalogSync';
 
 interface WishlistContextType {
   items: Product[];
@@ -39,6 +40,11 @@ export const WishlistProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   useEffect(() => {
     refreshWishlist();
   }, [user]);
+
+  // Synchronize wishlist live when products are edited or deleted
+  useCatalogSync(() => {
+    refreshWishlist();
+  });
 
   const isInWishlist = (productId: number): boolean => {
     return items.some(item => item.id === productId || (item as any).product_id === productId);

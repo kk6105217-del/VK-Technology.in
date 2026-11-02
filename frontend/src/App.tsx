@@ -1,5 +1,5 @@
 import React from 'react';
-import { BrowserRouter, Routes, Route, Outlet } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Outlet, Navigate } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
 import { CartProvider } from './context/CartContext';
 import { WishlistProvider } from './context/WishlistContext';
@@ -63,6 +63,28 @@ export const App: React.FC = () => {
         <CartProvider>
           <WishlistProvider>
             <Routes>
+              {/* Dedicated Owner Portal Login */}
+              <Route path="/admin/login" element={<AdminLogin />} />
+
+              {/* Owner-Only Administration Routes (Guarded inside AdminLayout) */}
+              <Route path="/admin" element={<AdminLayout />}>
+                <Route index element={<Navigate to="/admin/dashboard" replace />} />
+                <Route path="dashboard" element={<AdminDashboard />} />
+                <Route path="products" element={<AdminProducts />} />
+                <Route path="products/new" element={<AdminProductForm />} />
+                <Route path="products/:id/edit" element={<AdminProductForm />} />
+                <Route path="categories" element={<AdminCategories />} />
+                <Route path="orders" element={<AdminOrders />} />
+                <Route path="orders/:id" element={<AdminOrderDetail />} />
+                <Route path="inventory" element={<AdminInventory />} />
+                <Route path="coupons" element={<AdminCoupons />} />
+                <Route path="customers" element={<AdminCustomers />} />
+                <Route path="reports" element={<AdminReports />} />
+                <Route path="notifications" element={<AdminNotifications />} />
+                <Route path="settings" element={<AdminSettings />} />
+                <Route path="*" element={<NotFound />} />
+              </Route>
+
               {/* Public Storefront Routes */}
               <Route element={<StorefrontLayout />}>
                 <Route path="/" element={<Home />} />
@@ -83,26 +105,6 @@ export const App: React.FC = () => {
                 <Route path="/faq" element={<FAQ />} />
                 <Route path="/policies" element={<Policies />} />
                 <Route path="*" element={<NotFound />} />
-              </Route>
-
-              {/* Dedicated Owner Portal Login */}
-              <Route path="/admin/login" element={<AdminLogin />} />
-
-              {/* Owner-Only Administration Routes (Guarded inside AdminLayout) */}
-              <Route path="/admin" element={<AdminLayout />}>
-                <Route index element={<AdminDashboard />} />
-                <Route path="products" element={<AdminProducts />} />
-                <Route path="products/new" element={<AdminProductForm />} />
-                <Route path="products/:id/edit" element={<AdminProductForm />} />
-                <Route path="categories" element={<AdminCategories />} />
-                <Route path="orders" element={<AdminOrders />} />
-                <Route path="orders/:id" element={<AdminOrderDetail />} />
-                <Route path="inventory" element={<AdminInventory />} />
-                <Route path="coupons" element={<AdminCoupons />} />
-                <Route path="customers" element={<AdminCustomers />} />
-                <Route path="reports" element={<AdminReports />} />
-                <Route path="notifications" element={<AdminNotifications />} />
-                <Route path="settings" element={<AdminSettings />} />
               </Route>
             </Routes>
           </WishlistProvider>

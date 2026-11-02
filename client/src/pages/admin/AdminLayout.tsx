@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { Link, Outlet, useLocation, useNavigate, Navigate } from 'react-router-dom';
 import {
   LayoutDashboard,
   Package,
@@ -14,6 +14,7 @@ import {
   LogOut,
   ExternalLink,
   ShieldCheck,
+  ShieldAlert,
   Menu,
   X,
   User,
@@ -27,33 +28,50 @@ export const AdminLayout: React.FC = () => {
   const navigate = useNavigate();
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
-  // If loading, show spinner
+  // If loading auth state, show clean spinner
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-gray-100 flex items-center justify-center">
-        <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-amber-500" />
+      <div className="min-h-screen bg-gray-900 flex items-center justify-center">
+        <div className="text-center space-y-3">
+          <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-amber-400 mx-auto" />
+          <p className="text-xs text-gray-400 font-mono">Verifying admin credentials...</p>
+        </div>
       </div>
     );
   }
 
-  // Strictly protect admin routes
-  if (!user || !isAdmin) {
+  // If not authenticated, redirect to /admin/login immediately
+  if (!user) {
+    return <Navigate to="/admin/login" state={{ from: location.pathname }} replace />;
+  }
+
+  // If logged in as customer (not admin), explicitly deny access
+  if (!isAdmin) {
     return (
-      <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4 text-left">
-        <div className="bg-white p-8 rounded-lg shadow-md max-w-md w-full text-center space-y-4">
+      <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4 text-left">
+        <div className="bg-white p-8 rounded-xl shadow-2xl max-w-md w-full text-center space-y-4 border border-red-200">
           <div className="w-16 h-16 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto">
-            <ShieldCheck size={36} />
+            <ShieldAlert size={36} />
           </div>
-          <h2 className="text-xl font-bold text-gray-900">Admin Authorization Required</h2>
+          <h2 className="text-xl font-bold text-gray-900">Admin Privileges Required</h2>
           <p className="text-xs text-gray-600 leading-relaxed">
-            This administration portal is restricted strictly to verified store administrators.
+            You are signed in as <strong className="text-gray-900">{user.email}</strong>. Customer accounts do not have administrative access to the store management control center.
           </p>
-          <div className="pt-2">
-            <Link
-              to="/admin/login"
-              className="bg-amber-400 hover:bg-amber-500 text-gray-950 font-bold px-6 py-2.5 rounded text-xs inline-block shadow"
+          <div className="pt-2 flex flex-col gap-2">
+            <button
+              onClick={() => {
+                logout();
+                navigate('/admin/login', { replace: true });
+              }}
+              className="bg-amber-400 hover:bg-amber-500 text-gray-950 font-bold px-6 py-2.5 rounded text-xs shadow transition"
             >
-              Log in as Administrator
+              Log in with Admin Account
+            </button>
+            <Link
+              to="/"
+              className="text-xs text-gray-600 hover:text-gray-900 font-semibold py-1 transition"
+            >
+              ← Return to Customer Storefront
             </Link>
           </div>
         </div>
@@ -62,7 +80,7 @@ export const AdminLayout: React.FC = () => {
   }
 
   const navItems = [
-    { name: 'Overview', path: '/admin', icon: LayoutDashboard },
+    { name: 'Overview', path: '/admin/dashboard', icon: LayoutDashboard },
     { name: 'Products', path: '/admin/products', icon: Package },
     { name: 'Categories', path: '/admin/categories', icon: Layers },
     { name: 'Inventory & Stock', path: '/admin/inventory', icon: Boxes },
@@ -138,7 +156,10 @@ export const AdminLayout: React.FC = () => {
             </span>
             {navItems.map((item) => {
               const Icon = item.icon;
-              const isActive = location.pathname === item.path;
+              const isActive =
+                item.path === '/admin/dashboard'
+                  ? location.pathname === '/admin' || location.pathname === '/admin/dashboard'
+                  : location.pathname === item.path;
               return (
                 <Link
                   key={item.path}
@@ -180,7 +201,10 @@ export const AdminLayout: React.FC = () => {
                 </div>
                 {navItems.map((item) => {
                   const Icon = item.icon;
-                  const isActive = location.pathname === item.path;
+                  const isActive =
+                    item.path === '/admin/dashboard'
+                      ? location.pathname === '/admin' || location.pathname === '/admin/dashboard'
+                      : location.pathname === item.path;
                   return (
                     <Link
                       key={item.path}

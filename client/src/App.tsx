@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { BrowserRouter, Routes, Route, Outlet, useLocation, Link } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Outlet, useLocation, Link, Navigate } from 'react-router-dom';
 
 // Context Providers
 import { AuthProvider } from './context/AuthContext';
@@ -46,6 +46,7 @@ import { AdminReviews } from './pages/admin/AdminReviews';
 import { AdminReports } from './pages/admin/AdminReports';
 import { AdminSettings } from './pages/admin/AdminSettings';
 import { AdminUpiPayments } from './pages/admin/AdminUpiPayments';
+import { AdminNotFoundPage } from './pages/admin/AdminNotFoundPage';
 
 import { Cpu, Search, Home, HelpCircle } from 'lucide-react';
 
@@ -59,7 +60,7 @@ function ScrollToTop() {
 }
 
 // Storefront Wrapper Layout
-const StoreLayout: React.FC = () => {
+const StoreLayout: React.FC<{ children?: React.ReactNode }> = ({ children }) => {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   return (
@@ -67,7 +68,7 @@ const StoreLayout: React.FC = () => {
       <Header onOpenMobileMenu={() => setIsMobileMenuOpen(true)} />
       <Navbar isMobileOpen={isMobileMenuOpen} setIsMobileOpen={setIsMobileMenuOpen} />
       <main className="flex-1">
-        <Outlet />
+        {children || <Outlet />}
       </main>
       <Footer />
     </div>
@@ -126,6 +127,24 @@ export function App() {
                 <Route path="/forgot-password" element={<ForgotPasswordPage />} />
                 <Route path="/reset-password" element={<ResetPasswordPage />} />
 
+                {/* Dedicated Admin Portal Routes (Prioritized before Storefront) */}
+                <Route path="/admin/login" element={<AdminLoginPage />} />
+                <Route path="/admin" element={<AdminLayout />}>
+                  <Route index element={<Navigate to="/admin/dashboard" replace />} />
+                  <Route path="dashboard" element={<AdminDashboard />} />
+                  <Route path="products" element={<AdminProducts />} />
+                  <Route path="categories" element={<AdminCategories />} />
+                  <Route path="inventory" element={<AdminInventory />} />
+                  <Route path="orders" element={<AdminOrders />} />
+                  <Route path="upi-payments" element={<AdminUpiPayments />} />
+                  <Route path="coupons" element={<AdminCoupons />} />
+                  <Route path="banners" element={<AdminBanners />} />
+                  <Route path="reviews" element={<AdminReviews />} />
+                  <Route path="reports" element={<AdminReports />} />
+                  <Route path="settings" element={<AdminSettings />} />
+                  <Route path="*" element={<AdminNotFoundPage />} />
+                </Route>
+
                 {/* Storefront Layout & Customer Routes */}
                 <Route path="/" element={<StoreLayout />}>
                   <Route index element={<HomePage />} />
@@ -147,26 +166,17 @@ export function App() {
                   <Route path="about" element={<AboutPage />} />
                   <Route path="policies" element={<LegalPolicyPage />} />
                   <Route path="policy/:type" element={<LegalPolicyPage />} />
-
-                  {/* 404 Route */}
-                  <Route path="*" element={<NotFoundPage />} />
                 </Route>
 
-                {/* Dedicated Admin Portal Routes */}
-                <Route path="/admin/login" element={<AdminLoginPage />} />
-                <Route path="/admin" element={<AdminLayout />}>
-                  <Route index element={<AdminDashboard />} />
-                  <Route path="products" element={<AdminProducts />} />
-                  <Route path="categories" element={<AdminCategories />} />
-                  <Route path="inventory" element={<AdminInventory />} />
-                  <Route path="orders" element={<AdminOrders />} />
-                  <Route path="upi-payments" element={<AdminUpiPayments />} />
-                  <Route path="coupons" element={<AdminCoupons />} />
-                  <Route path="banners" element={<AdminBanners />} />
-                  <Route path="reviews" element={<AdminReviews />} />
-                  <Route path="reports" element={<AdminReports />} />
-                  <Route path="settings" element={<AdminSettings />} />
-                </Route>
+                {/* Catch-all 404 for Unknown Storefront Routes */}
+                <Route
+                  path="*"
+                  element={
+                    <StoreLayout>
+                      <NotFoundPage />
+                    </StoreLayout>
+                  }
+                />
               </Routes>
             </WishlistProvider>
           </CartProvider>

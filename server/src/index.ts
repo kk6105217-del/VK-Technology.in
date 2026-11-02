@@ -81,6 +81,9 @@ routeBindings.forEach(([prefix, router]) => {
   app.use(prefix, router);
 });
 
+// Explicit administration endpoints binding for global product synchronization
+app.use('/api/admin/products', productsRouter);
+
 // Health check endpoint on both /api/health and /health
 const healthHandler = (_req: express.Request, res: express.Response) => {
   res.json({
@@ -126,27 +129,6 @@ app.get(['/api/openapi.json', '/openapi.json', '/api/docs.json'], (_req, res) =>
   res.json(openApiSpec);
 });
 
-// Embedded storefront HTML fallback for seamless 200 response on serverless
-const embeddedIndexHtml = `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <link rel="icon" type="image/png" href="/logo.png" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>VK Technology – DIY Electronics, Robotics, IoT & Engineering Project Kits</title>
-    <meta name="description" content="VK Technology is India's premier online store for DIY electronics, Arduino kits, ESP32, robotics components, sensors, drone modules, and student engineering project kits with express delivery across India." />
-    <meta name="keywords" content="VK Technology, DIY electronics India, Arduino kits, ESP32 IoT, sensors, drone parts, robotics, student project kits" />
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
-    <script type="module" crossorigin src="/assets/index-CeyxK7AU.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-xRfZp55G.css">
-  </head>
-  <body class="bg-gray-100 text-gray-900 font-sans antialiased selection:bg-amber-400 selection:text-gray-950">
-    <div id="root"></div>
-  </body>
-</html>`;
-
 // Production: Serve React client build if present
 const possibleDistPaths = [
   path.resolve(__dirname, 'public'),
@@ -162,6 +144,60 @@ const clientDist = possibleDistPaths.find(p => fs.existsSync(p));
 if (clientDist) {
   app.use(express.static(clientDist));
   app.use('/assets', express.static(path.join(clientDist, 'assets')));
+}
+
+function getSpaHtml(): string {
+  if (clientDist) {
+    const indexPath = path.join(clientDist, 'index.html');
+    if (fs.existsSync(indexPath)) {
+      try {
+        return fs.readFileSync(indexPath, 'utf-8');
+      } catch {}
+    }
+
+    const assetsDir = path.join(clientDist, 'assets');
+    if (fs.existsSync(assetsDir)) {
+      try {
+        const files = fs.readdirSync(assetsDir);
+        const js = files.find(f => f.startsWith('index-') && f.endsWith('.js'));
+        const css = files.find(f => f.startsWith('index-') && f.endsWith('.css'));
+        if (js) {
+          return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/png" href="/logo.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VK Technology – DIY Electronics, Robotics, IoT & Engineering Project Kits</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+    <script type="module" crossorigin src="/assets/${js}"></script>
+    ${css ? `<link rel="stylesheet" crossorigin href="/assets/${css}">` : ''}
+  </head>
+  <body class="bg-gray-100 text-gray-900 font-sans antialiased selection:bg-amber-400 selection:text-gray-950">
+    <div id="root"></div>
+  </body>
+</html>`;
+        }
+      } catch {}
+    }
+  }
+
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/png" href="/logo.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VK Technology – DIY Electronics, Robotics, IoT & Engineering Project Kits</title>
+    <script type="module" crossorigin src="/assets/index-CBMXmavX.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-CttJrRZp.css">
+  </head>
+  <body class="bg-gray-100 text-gray-900 font-sans antialiased selection:bg-amber-400 selection:text-gray-950">
+    <div id="root"></div>
+  </body>
+</html>`;
 }
 
 app.get('*', (req, res, next) => {
@@ -183,7 +219,7 @@ app.get('*', (req, res, next) => {
   }
 
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  res.send(embeddedIndexHtml);
+  res.send(getSpaHtml());
 });
 
 // Proxy / communication endpoint with internal Python backend service

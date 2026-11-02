@@ -1,11 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { ShieldCheck, Lock, Mail, AlertCircle, ArrowRight, Eye, EyeOff } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 
 export const AdminLoginPage: React.FC = () => {
   const navigate = useNavigate();
-  const { adminLogin } = useAuth();
+  const { user, isAdmin, isLoading: authLoading, adminLogin } = useAuth();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -13,31 +13,28 @@ export const AdminLoginPage: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
+  // If already logged in as admin, redirect directly to admin dashboard
+  useEffect(() => {
+    if (!authLoading && user && isAdmin) {
+      navigate('/admin/dashboard', { replace: true });
+    }
+  }, [user, isAdmin, authLoading, navigate]);
+
   const handleAdminLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
 
-    const cleanEmail = email.trim().toLowerCase();
-    const customAdminEmail = localStorage.getItem('vk_admin_email')?.toLowerCase();
-    const isAllowedAdmin =
-      cleanEmail === 'admin@vktechnology.shop' ||
-      cleanEmail === 'admin@vktechnology' ||
-      cleanEmail === 'admin@vktechnology.in' ||
-      cleanEmail === 'karthik.suroju@gmail.com' ||
-      cleanEmail === 'admin' ||
-      (customAdminEmail && cleanEmail === customAdminEmail);
-
-    if (!isAllowedAdmin) {
-      setErrorMsg('Access denied. Please enter an authorized administrator account.');
+    if (!email.trim() || !password) {
+      setErrorMsg('Please enter both your admin email and password.');
       return;
     }
 
     try {
       setIsLoading(true);
       await adminLogin({ email: email.trim(), password });
-      navigate('/admin');
+      navigate('/admin/dashboard', { replace: true });
     } catch (err: any) {
-      setErrorMsg(err.message || 'Authentication failed. Please verify your admin password.');
+      setErrorMsg(err.message || 'Authentication failed. Please verify your administrator credentials.');
     } finally {
       setIsLoading(false);
     }

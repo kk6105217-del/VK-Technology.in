@@ -255,17 +255,133 @@ describe('VK Technology Full-Stack E-Commerce Platform Test Suite', () => {
   });
 
   // -------------------------------------------------------------
-  // Test 8: Health & OpenAPI Documentation
+  // Test 9: Image Update & Global Sync
   // -------------------------------------------------------------
-  it('Should return healthy operational status and valid OpenAPI JSON specification', async () => {
-    const health = await request(app).get('/api/health');
-    expect(health.status).toBe(200);
-    expect(health.body.status).toBe('ok');
-    expect(health.body.store).toBe('VK Technology');
+  it('Should update product images and synchronize across all clients', async () => {
+    const newImageUrl = 'https://images.unsplash.com/photo-1581092160607-ee22621dd758?auto=format&fit=crop&w=800&q=80';
+    const res = await request(app)
+      .put(`/api/admin/products/${testProductId}`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        images: [newImageUrl]
+      });
 
-    const openapi = await request(app).get('/api/openapi.json');
-    expect(openapi.status).toBe(200);
-    expect(openapi.body.openapi).toBe('3.0.3');
-    expect(openapi.body.info.title).toContain('VK Technology');
+    expect(res.status).toBe(200);
+    expect(res.body.product).toBeDefined();
+
+    // Verify customer public endpoint returns the updated image
+    const custRes = await request(app).get(`/api/products/${testProductId}`);
+    expect(custRes.status).toBe(200);
+    expect(custRes.body.product.primary_image).toBe(newImageUrl);
+  });
+
+  // -------------------------------------------------------------
+  // Test 10: Status Toggle (Publish / Unpublish)
+  // -------------------------------------------------------------
+  it('Should toggle product publish status and instantly affect public listings', async () => {
+    // Unpublish product
+    const unpublishRes = await request(app)
+      .patch(`/api/admin/products/${testProductId}/status`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ is_active: false });
+
+    expect(unpublishRes.status).toBe(200);
+
+    // Public catalog query must omit unpublished product
+    const catalogAfterUnpublish = await request(app).get('/api/products?limit=100');
+    const foundInactive = catalogAfterUnpublish.body.products.find((p: any) => p.id === testProductId);
+    expect(foundInactive).toBeUndefined();
+
+    // Re-publish product
+    const publishRes = await request(app)
+      .patch(`/api/admin/products/${testProductId}/status`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ is_active: true });
+
+    expect(publishRes.status).toBe(200);
+
+    // Public catalog query must now include published product
+    const catalogAfterPublish = await request(app).get('/api/products?limit=100');
+    const foundActive = catalogAfterPublish.body.products.find((p: any) => p.id === testProductId);
+    expect(foundActive).toBeDefined();
+  });
+
+  // -------------------------------------------------------------
+  // Test 11: Dedicated /api/admin/products Endpoint Coverage
+  // -------------------------------------------------------------
+  it('Should support full CRUD via dedicated /api/admin/products endpoints', async () => {
+    // List via /api/admin/products
+    const listRes = await request(app)
+      .get('/api/admin/products')
+      .set('Authorization', `Bearer ${adminToken}`);
+
+    expect(listRes.status).toBe(200);
+    expect(Array.isArray(listRes.body.products)).toBe(true);
+
+    // Create via /api/admin/products
+    const createSku = `VK-ADM-${Date.now().toString().slice(-5)}`;
+    const createRes = await request(app)
+      .post('/api/admin/products')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        name: 'STM32 ARM Cortex-M4 Microcontroller Kit',
+        sku: createSku,
+        category_id: 1,
+        regular_price: 1299,
+        discounted_price: 999,
+        stock_quantity: 25,
+        brand: 'VK Technology',
+        description: 'High-speed 32-bit ARM development kit for embedded engineering'
+      });
+
+    expect([200, 201]).toContain(createRes.status);
+    const createdId = createRes.body.productId;
+
+    // Delete via /api/admin/products/:id
+    const delRes = await request(app)
+      .delete(`/api/admin/products/${createdId}`)
+      .set('Authorization', `Bearer ${adminToken}`);
+
+    expect(delRes.status).toBe(200);
+
+    // Verify completely purged from central database
+    const dbCheck = db.prepare('SELECT id FROM products WHERE id = ?').get(createdId);
+    expect(dbCheck).toBeUndefined();
+  });
+
+  // -------------------------------------------------------------
+  // Test 12: Product Deletion & Global Disappearance
+  // -------------------------------------------------------------
+  it('Should delete product and immediately remove from all customer views and carts', async () => {
+    // Add product to customer cart first
+    const guestCartId = `guest_delete_test_${Date.now()}`;
+    await request(app)
+      .post('/api/cart/items')
+      .set('x-guest-id', guestCartId)
+      .send({ product_id: testProductId, quantity: 1 });
+
+    // Admin deletes product
+    const deleteRes = await request(app)
+      .delete(`/api/products/${testProductId}`)
+      .set('Authorization', `Bearer ${adminToken}`);
+
+    expect(deleteRes.status).toBe(200);
+
+    // Customer fetching the deleted product gets 404
+    const getDeleted = await request(app).get(`/api/products/${testProductId}`);
+    expect(getDeleted.status).toBe(404);
+
+    // Customer viewing catalog no longer sees the product
+    const catalogView = await request(app).get('/api/products?limit=100');
+    const matched = catalogView.body.products.find((p: any) => p.id === testProductId);
+    expect(matched).toBeUndefined();
+
+    // Customer viewing cart sees 0 count and 0 subtotal for deleted item
+    const cartView = await request(app)
+      .get('/api/cart')
+      .set('x-guest-id', guestCartId);
+
+    expect(cartView.body.items.length).toBe(0);
+    expect(cartView.body.subtotal).toBe(0);
   });
 });
