@@ -19,6 +19,9 @@ import { settingsRouter } from './routes/settings.js';
 import { uploadRouter } from './routes/upload.js';
 import { contactRouter } from './routes/contact.js';
 import { upiRouter } from './routes/upi.js';
+import { projectsRouter } from './routes/projects.js';
+import { appsRouter } from './routes/apps.js';
+import { analyticsRouter } from './routes/analytics.js';
 import { eventBroadcaster } from './services/events.js';
 import { openApiSpec } from './openapi.js';
 
@@ -74,15 +77,28 @@ const routeBindings = [
   ['/upload', uploadRouter],
   ['/contact', contactRouter],
   ['/upi', upiRouter],
+  ['/projects', projectsRouter],
+  ['/apps', appsRouter],
+  ['/analytics', analyticsRouter],
 ] as const;
 
 routeBindings.forEach(([prefix, router]) => {
   app.use(`/api${prefix}`, router);
-  app.use(prefix, router);
+  // Route stripped prefix paths only for programmatic/API requests; let HTML navigation reach SPA fallback
+  app.use(prefix, (req, res, next) => {
+    const acceptsHtml = req.headers.accept && req.headers.accept.includes('text/html');
+    if (acceptsHtml && req.method === 'GET') {
+      return next();
+    }
+    return router(req, res, next);
+  });
 });
 
-// Explicit administration endpoints binding for global product synchronization
+// Explicit administration endpoints binding for global synchronization & modular RBAC
 app.use('/api/admin/products', productsRouter);
+app.use('/api/admin/projects', projectsRouter);
+app.use('/api/admin/apps', appsRouter);
+app.use('/api/admin/analytics', analyticsRouter);
 
 // Health check endpoint on both /api/health and /health
 const healthHandler = (_req: express.Request, res: express.Response) => {

@@ -78,8 +78,10 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const applyCoupon = async (code: string) => {
     const res = await api.coupons.validate(code, subtotal);
-    if (res.valid) {
+    if (res && res.valid && res.coupon) {
       setAppliedCoupon(res.coupon);
+    } else {
+      throw new Error((res as any)?.error || 'Invalid or expired coupon code.');
     }
   };
 

@@ -323,7 +323,8 @@ authRouter.put('/profile', authenticateToken, (req: AuthenticatedRequest, res: R
       UPDATE users SET full_name = ?, phone = ?, updated_at = datetime('now') WHERE id = ?
     `).run(full_name, phone, req.user!.id);
 
-    res.json({ message: 'Profile updated successfully.' });
+    const updatedUser = db.prepare('SELECT id, email, full_name, phone, role FROM users WHERE id = ?').get(req.user!.id) as any;
+    res.json({ message: 'Profile updated successfully.', user: updatedUser });
   } catch (error: any) {
     res.status(500).json({ error: 'Failed to update profile.' });
   }
@@ -485,7 +486,8 @@ authRouter.post('/addresses', authenticateToken, (req: AuthenticatedRequest, res
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(req.user!.id, full_name, phone, address_line1, address_line2 || null, landmark || null, city, state, postal_code, is_default ? 1 : 0);
 
-    res.status(201).json({ message: 'Address saved successfully.', id: Number(result.lastInsertRowid) });
+    const insertedId = Number(result.lastInsertRowid);
+    res.status(201).json({ message: 'Address saved successfully.', id: insertedId, addressId: insertedId });
   } catch (error: any) {
     res.status(500).json({ error: 'Failed to save address.' });
   }

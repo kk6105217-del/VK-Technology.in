@@ -384,4 +384,62 @@ describe('VK Technology Full-Stack E-Commerce Platform Test Suite', () => {
     expect(cartView.body.items.length).toBe(0);
     expect(cartView.body.subtotal).toBe(0);
   });
+
+  // -------------------------------------------------------------
+  // Test 13: Bulk Status Update (Publish / Unpublish)
+  // -------------------------------------------------------------
+  it('Should bulk toggle status for multiple products atomically', async () => {
+    // Create 2 test products
+    const p1 = await request(app)
+      .post('/api/products')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ name: 'Bulk Product Alpha', sku: `BLK-A-${Date.now()}`, category_id: 1, regular_price: 399, is_active: 1 });
+    const p2 = await request(app)
+      .post('/api/products')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ name: 'Bulk Product Beta', sku: `BLK-B-${Date.now()}`, category_id: 1, regular_price: 499, is_active: 1 });
+
+    const id1 = p1.body.productId;
+    const id2 = p2.body.productId;
+
+    // Bulk unpublish
+    const unpublishRes = await request(app)
+      .post('/api/products/admin/bulk-status')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ ids: [id1, id2], is_active: false });
+
+    expect(unpublishRes.status).toBe(200);
+    expect(unpublishRes.body.count).toBe(2);
+
+    // Verify both are unpublished
+    const row1 = db.prepare('SELECT is_active FROM products WHERE id = ?').get(id1) as any;
+    const row2 = db.prepare('SELECT is_active FROM products WHERE id = ?').get(id2) as any;
+    expect(row1.is_active).toBe(0);
+    expect(row2.is_active).toBe(0);
+
+    // Bulk publish back
+    const publishRes = await request(app)
+      .post('/api/products/admin/bulk-status')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ ids: [id1, id2], is_active: true });
+
+    expect(publishRes.status).toBe(200);
+
+    // -------------------------------------------------------------
+    // Test 14: Bulk Delete Products
+    // -------------------------------------------------------------
+    const bulkDeleteRes = await request(app)
+      .post('/api/products/admin/bulk-delete')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ ids: [id1, id2] });
+
+    expect(bulkDeleteRes.status).toBe(200);
+    expect(bulkDeleteRes.body.deletedCount).toBe(2);
+
+    // Verify deleted from database
+    const check1 = db.prepare('SELECT * FROM products WHERE id = ?').get(id1);
+    const check2 = db.prepare('SELECT * FROM products WHERE id = ?').get(id2);
+    expect(check1).toBeUndefined();
+    expect(check2).toBeUndefined();
+  });
 });

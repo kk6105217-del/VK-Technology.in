@@ -551,7 +551,7 @@ ordersRouter.get('/admin/all', authenticateToken, requireAdmin, (req: Authentica
 });
 
 // Admin: Update order status & tracking
-ordersRouter.patch('/admin/:id/status', authenticateToken, requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+const handleOrderStatusUpdate = async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { order_status, payment_status, tracking_number, notes } = req.body;
     const orderId = req.params.id;
@@ -599,7 +599,11 @@ ordersRouter.patch('/admin/:id/status', authenticateToken, requireAdmin, async (
     console.error('Failed to update order status:', error);
     res.status(500).json({ error: error.message || 'Failed to update order status.' });
   }
-});
+};
+ordersRouter.patch('/admin/:id/status', authenticateToken, requireAdmin, handleOrderStatusUpdate);
+ordersRouter.patch('/:id/status', authenticateToken, requireAdmin, handleOrderStatusUpdate);
+ordersRouter.put('/admin/:id/status', authenticateToken, requireAdmin, handleOrderStatusUpdate);
+ordersRouter.put('/:id/status', authenticateToken, requireAdmin, handleOrderStatusUpdate);
 
 // Admin: Get notification delivery logs for an order
 ordersRouter.get('/admin/:id/notifications', authenticateToken, requireAdmin, (req: AuthenticatedRequest, res: Response) => {

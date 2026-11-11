@@ -78,7 +78,7 @@ upiRouter.get('/admin/all', authenticateToken, requireAdmin, (req: Authenticated
 });
 
 // Admin: Approve UPI Payment after manual verification against bank records
-upiRouter.post('/admin/:id/approve', authenticateToken, requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+const handleApprovePayment = async (req: AuthenticatedRequest, res: Response) => {
   try {
     const paymentId = req.params.id;
     const adminEmail = req.user?.email || config.adminEmail;
@@ -131,10 +131,16 @@ upiRouter.post('/admin/:id/approve', authenticateToken, requireAdmin, async (req
     console.error('Approval error:', error);
     res.status(500).json({ error: 'Failed to approve payment.' });
   }
-});
+};
+upiRouter.post('/admin/:id/approve', authenticateToken, requireAdmin, handleApprovePayment);
+upiRouter.patch('/admin/:id/approve', authenticateToken, requireAdmin, handleApprovePayment);
+upiRouter.post('/:id/approve', authenticateToken, requireAdmin, handleApprovePayment);
+upiRouter.patch('/:id/approve', authenticateToken, requireAdmin, handleApprovePayment);
+upiRouter.post('/payments/:id/approve', authenticateToken, requireAdmin, handleApprovePayment);
+upiRouter.patch('/payments/:id/approve', authenticateToken, requireAdmin, handleApprovePayment);
 
 // Admin: Reject UPI Payment
-upiRouter.post('/admin/:id/reject', authenticateToken, requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+const handleRejectPayment = async (req: AuthenticatedRequest, res: Response) => {
   try {
     const paymentId = req.params.id;
     const { reason, notes } = req.body;
@@ -182,7 +188,13 @@ upiRouter.post('/admin/:id/reject', authenticateToken, requireAdmin, async (req:
   } catch (error: any) {
     res.status(500).json({ error: 'Failed to reject payment.' });
   }
-});
+};
+upiRouter.post('/admin/:id/reject', authenticateToken, requireAdmin, handleRejectPayment);
+upiRouter.patch('/admin/:id/reject', authenticateToken, requireAdmin, handleRejectPayment);
+upiRouter.post('/:id/reject', authenticateToken, requireAdmin, handleRejectPayment);
+upiRouter.patch('/:id/reject', authenticateToken, requireAdmin, handleRejectPayment);
+upiRouter.post('/payments/:id/reject', authenticateToken, requireAdmin, handleRejectPayment);
+upiRouter.patch('/payments/:id/reject', authenticateToken, requireAdmin, handleRejectPayment);
 
 // Admin: Add or update internal note on UPI payment
 upiRouter.put('/admin/:id/note', authenticateToken, requireAdmin, (req: AuthenticatedRequest, res: Response) => {

@@ -12,7 +12,8 @@ import {
   Eye,
   EyeOff,
   Image as ImageIcon,
-  Check
+  Check,
+  CheckSquare
 } from 'lucide-react';
 import { api } from '../../services/api';
 import { Product, Category } from '../../types';
@@ -24,6 +25,10 @@ export const AdminProducts: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [filterCategory, setFilterCategory] = useState('');
   const [isLoading, setIsLoading] = useState(true);
+
+  // Bulk Selection and Operations State
+  const [selectedProductIds, setSelectedProductIds] = useState<number[]>([]);
+  const [isBulkOperating, setIsBulkOperating] = useState(false);
 
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -286,6 +291,58 @@ export const AdminProducts: React.FC = () => {
     return matchesSearch && matchesCat;
   });
 
+  const isAllSelected = filteredProducts.length > 0 && selectedProductIds.length === filteredProducts.length;
+
+  const toggleSelectAll = () => {
+    if (isAllSelected) {
+      setSelectedProductIds([]);
+    } else {
+      setSelectedProductIds(filteredProducts.map(p => p.id));
+    }
+  };
+
+  const toggleSelectProduct = (id: number) => {
+    setSelectedProductIds(prev =>
+      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+    );
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedProductIds.length === 0) return;
+    const isAllStore = selectedProductIds.length === products.length;
+    const confirmPrompt = isAllStore
+      ? `⚠️ DANGER / CONFIRMATION: Are you sure you want to DELETE ALL ${selectedProductIds.length} products from the store?\n\nProducts in existing customer orders will be preserved and safely archived. Products without orders will be permanently removed.`
+      : `Are you sure you want to delete ${selectedProductIds.length} selected products?\n\nProducts in existing customer orders will be preserved and safely archived.`;
+
+    if (window.confirm(confirmPrompt)) {
+      try {
+        setIsBulkOperating(true);
+        const res = await api.products.bulkDelete(selectedProductIds);
+        setSelectedProductIds([]);
+        await loadData();
+        alert(res.message);
+      } catch (err: any) {
+        alert(err.message || 'Failed to delete selected products.');
+      } finally {
+        setIsBulkOperating(false);
+      }
+    }
+  };
+
+  const handleBulkToggleStatus = async (publish: boolean) => {
+    if (selectedProductIds.length === 0) return;
+    try {
+      setIsBulkOperating(true);
+      const res = await api.products.bulkToggleStatus(selectedProductIds, publish);
+      await loadData();
+      alert(res.message);
+    } catch (err: any) {
+      alert(err.message || 'Failed to update selected products.');
+    } finally {
+      setIsBulkOperating(false);
+    }
+  };
+
   return (
     <div className="space-y-6 text-left">
       {/* Title & Actions */}
@@ -296,14 +353,92 @@ export const AdminProducts: React.FC = () => {
             Add, edit, upload images, adjust pricing, and control inventory for all DIY electronics.
           </p>
         </div>
-        <button
-          onClick={openCreateModal}
-          className="bg-amber-400 hover:bg-amber-500 text-gray-950 font-bold px-4 py-2 rounded text-xs shadow flex items-center space-x-1.5 transition"
-        >
-          <Plus size={16} />
-          <span>Add New Product</span>
-        </button>
+        <div className="flex items-center space-x-2">
+          <button
+            onClick={() => {
+              if (selectedProductIds.length === filteredProducts.length && filteredProducts.length > 0) {
+                setSelectedProductIds([]);
+              } else {
+                setSelectedProductIds(filteredProducts.map(p => p.id));
+              }
+            }}
+            className="border border-gray-300 hover:border-gray-400 bg-white text-gray-700 font-semibold px-3 py-2 rounded text-xs shadow-sm flex items-center space-x-1.5 transition"
+          >
+            <CheckSquare size={14} className="text-amber-500" />
+            <span>
+              {selectedProductIds.length === filteredProducts.length && filteredProducts.length > 0
+                ? 'Deselect All'
+                : `Select All (${filteredProducts.length})`}
+            </span>
+          </button>
+          <button
+            onClick={openCreateModal}
+            className="bg-amber-400 hover:bg-amber-500 text-gray-950 font-bold px-4 py-2 rounded text-xs shadow flex items-center space-x-1.5 transition"
+          >
+            <Plus size={16} />
+            <span>Add New Product</span>
+          </button>
+        </div>
       </div>
+
+      {/* Floating Bulk Action Bar */}
+      {selectedProductIds.length > 0 && (
+        <div className="bg-gray-900 text-white px-4 py-3 rounded-xl shadow-lg border border-gray-800 flex flex-wrap items-center justify-between gap-3 animate-in fade-in slide-in-from-top-2">
+          <div className="flex items-center space-x-3">
+            <div className="w-6 h-6 rounded-full bg-amber-400 text-gray-950 font-bold text-xs flex items-center justify-center">
+              {selectedProductIds.length}
+            </div>
+            <span className="text-xs font-semibold text-gray-200">
+              {selectedProductIds.length} of {products.length} products selected
+            </span>
+            {selectedProductIds.length < filteredProducts.length && (
+              <button
+                onClick={() => setSelectedProductIds(filteredProducts.map(p => p.id))}
+                className="text-[11px] text-amber-400 hover:underline font-medium"
+              >
+                Select all {filteredProducts.length} visible
+              </button>
+            )}
+          </div>
+          <div className="flex items-center space-x-2">
+            <button
+              disabled={isBulkOperating}
+              onClick={() => handleBulkToggleStatus(true)}
+              className="bg-gray-800 hover:bg-gray-700 text-emerald-400 border border-emerald-900/60 font-semibold px-3 py-1.5 rounded text-xs flex items-center space-x-1 transition disabled:opacity-50"
+            >
+              <Eye size={13} />
+              <span>Publish Selected</span>
+            </button>
+            <button
+              disabled={isBulkOperating}
+              onClick={() => handleBulkToggleStatus(false)}
+              className="bg-gray-800 hover:bg-gray-700 text-amber-300 border border-amber-900/60 font-semibold px-3 py-1.5 rounded text-xs flex items-center space-x-1 transition disabled:opacity-50"
+            >
+              <EyeOff size={13} />
+              <span>Unpublish Selected</span>
+            </button>
+            <button
+              disabled={isBulkOperating}
+              onClick={handleBulkDelete}
+              className="bg-red-600 hover:bg-red-700 text-white font-bold px-3 py-1.5 rounded text-xs shadow flex items-center space-x-1 transition disabled:opacity-50"
+            >
+              <Trash2 size={13} />
+              <span>
+                {selectedProductIds.length === products.length
+                  ? 'Delete All Products'
+                  : `Delete Selected (${selectedProductIds.length})`}
+              </span>
+            </button>
+            <button
+              onClick={() => setSelectedProductIds([])}
+              className="text-gray-400 hover:text-white p-1.5 rounded hover:bg-gray-800 transition"
+              title="Deselect All"
+            >
+              <X size={15} />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Filter and Search Bar */}
       <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm flex flex-col sm:flex-row gap-3 items-center justify-between">
@@ -343,6 +478,20 @@ export const AdminProducts: React.FC = () => {
           <table className="w-full text-left text-xs">
             <thead className="bg-gray-50 border-b border-gray-200 text-gray-600 font-bold uppercase tracking-wider text-[11px]">
               <tr>
+                <th className="py-3 px-3 w-10 text-center">
+                  <input
+                    type="checkbox"
+                    aria-label="Select all products"
+                    checked={isAllSelected}
+                    ref={el => {
+                      if (el) {
+                        el.indeterminate = selectedProductIds.length > 0 && !isAllSelected;
+                      }
+                    }}
+                    onChange={toggleSelectAll}
+                    className="rounded border-gray-300 text-amber-500 focus:ring-amber-400 cursor-pointer w-4 h-4"
+                  />
+                </th>
                 <th className="py-3 px-4">Product Details</th>
                 <th className="py-3 px-3">Category</th>
                 <th className="py-3 px-3">Price (₹)</th>
@@ -355,9 +504,19 @@ export const AdminProducts: React.FC = () => {
               {filteredProducts.map((p) => {
                 const isOutOfStock = p.stock_quantity <= 0;
                 const isLowStock = p.stock_quantity > 0 && p.stock_quantity <= 5;
+                const isSelected = selectedProductIds.includes(p.id);
 
                 return (
-                  <tr key={p.id} className="hover:bg-gray-50 transition">
+                  <tr key={p.id} className={`hover:bg-gray-50 transition ${isSelected ? 'bg-amber-50/40' : ''}`}>
+                    <td className="py-3 px-3 w-10 text-center">
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${p.name}`}
+                        checked={isSelected}
+                        onChange={() => toggleSelectProduct(p.id)}
+                        className="rounded border-gray-300 text-amber-500 focus:ring-amber-400 cursor-pointer w-4 h-4"
+                      />
+                    </td>
                     <td className="py-3 px-4 flex items-center space-x-3">
                       <img
                         src={p.primary_image || 'https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=100&q=80'}

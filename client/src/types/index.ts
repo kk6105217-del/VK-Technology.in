@@ -1,9 +1,11 @@
+export type UserRole = 'admin' | 'customer' | 'SUPER_ADMIN' | 'PRODUCT_MANAGER' | 'ORDER_MANAGER' | 'INVENTORY_MANAGER';
+
 export interface User {
   id: number;
   email: string;
   full_name: string;
   phone?: string | null;
-  role: 'admin' | 'customer';
+  role: UserRole;
   created_at?: string;
 }
 
@@ -217,4 +219,61 @@ export interface StoreSettings {
   upi_payee_name?: string;
   upi_qr_image_url?: string;
   [key: string]: string | undefined;
+}
+
+export interface ProjectComponent {
+  id?: number;
+  project_id?: number;
+  product_id?: number | null;
+  product_slug?: string | null;
+  discounted_price?: number | null;
+  regular_price?: number | null;
+  stock_quantity?: number | null;
+  name: string;
+  quantity: number;
+  notes?: string | null;
+}
+
+export interface Project {
+  id: number;
+  slug: string;
+  title: string;
+  short_description?: string;
+  description: string;
+  category: string;
+  difficulty: 'Beginner' | 'Intermediate' | 'Advanced';
+  estimated_time: string;
+  image_url: string;
+  circuit_diagram_url?: string;
+  code_url?: string;
+  youtube_url?: string;
+  view_count?: number;
+  is_featured: number | boolean;
+  is_active: number | boolean;
+  components?: ProjectComponent[];
+  component_count?: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface AppItem {
+  id: number;
+  slug: string;
+  name: string;
+  short_description?: string;
+  description: string;
+  platform: string;
+  status: 'Live' | 'Beta' | 'Coming Soon';
+  version: string;
+  icon?: string;
+  image_url: string;
+  download_url?: string;
+  play_store_url?: string;
+  web_url?: string;
+  features?: string[];
+  features_json?: string;
+  sort_order: number;
+  is_active: number | boolean;
+  created_at?: string;
+  updated_at?: string;
 }

@@ -53,6 +53,7 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
   const guestId = getGuestId();
 
   const headers: Record<string, string> = {
+    'Accept': 'application/json',
     'Content-Type': 'application/json',
     'x-guest-id': guestId,
     ...(options.headers as Record<string, string> || {}),
@@ -157,7 +158,8 @@ export const api = {
         if (res && res.token && res.user) {
           setAuthToken(res.token);
           localStorage.setItem('vk_current_user', JSON.stringify(res.user));
-          if (res.user.role === 'admin') {
+          const ADMIN_ROLES = ['admin', 'SUPER_ADMIN', 'PRODUCT_MANAGER', 'ORDER_MANAGER', 'INVENTORY_MANAGER'];
+          if (res.user.role && ADMIN_ROLES.includes(res.user.role)) {
             localStorage.setItem('vk_admin_user', JSON.stringify(res.user));
           } else {
             localStorage.setItem('vk_customer_user', JSON.stringify(res.user));
@@ -662,6 +664,46 @@ export const api = {
       });
       try {
         realtimeSync.notify('PRODUCT_DELETED', { id: Number(id), ...res });
+      } catch {}
+      return res;
+    },
+    bulkDelete: async (ids: number[] | { all: boolean }) => {
+      const body = Array.isArray(ids) ? { ids } : ids;
+      const res = await request<{
+        message: string;
+        deletedCount: number;
+        archivedCount: number;
+        totalProcessed: number;
+      }>('/products/admin/bulk-delete', {
+        method: 'POST',
+        body: JSON.stringify(body)
+      });
+      try {
+        realtimeSync.notify('PRODUCT_DELETED', res);
+      } catch {}
+      return res;
+    },
+    deleteAll: async () => {
+      const res = await request<{
+        message: string;
+        deletedCount: number;
+        archivedCount: number;
+        totalProcessed: number;
+      }>('/products/admin/all', {
+        method: 'DELETE'
+      });
+      try {
+        realtimeSync.notify('PRODUCT_DELETED', res);
+      } catch {}
+      return res;
+    },
+    bulkToggleStatus: async (ids: number[], is_active: boolean) => {
+      const res = await request<{ message: string; count: number }>('/products/admin/bulk-status', {
+        method: 'POST',
+        body: JSON.stringify({ ids, is_active })
+      });
+      try {
+        realtimeSync.notify('PRODUCT_UPDATED', { ids, is_active, ...res });
       } catch {}
       return res;
     },
@@ -1205,5 +1247,80 @@ export const api = {
       }),
     getAuditLogs: () =>
       request<{ logs: any[] }>('/upi/admin/audit-logs'),
+  },
+
+  // DIY Projects
+  projects: {
+    getAll: async (params: { category?: string; difficulty?: string; search?: string } = {}) => {
+      const q = new URLSearchParams();
+      if (params.category) q.append('category', params.category);
+      if (params.difficulty) q.append('difficulty', params.difficulty);
+      if (params.search) q.append('search', params.search);
+      return request<{ projects: any[] }>(`/projects?${q.toString()}`);
+    },
+    getBySlug: async (slug: string) =>
+      request<{ project: any; components: any[] }>(`/projects/${slug}`),
+    getAdminAll: async () =>
+      request<{ projects: any[] }>('/projects/admin/all'),
+    create: async (data: any) =>
+      request<{ message: string; project: any }>('/projects/admin', {
+        method: 'POST',
+        body: JSON.stringify(data)
+      }),
+    update: async (id: number, data: any) =>
+      request<{ message: string; project: any }>(`/projects/admin/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(data)
+      }),
+    delete: async (id: number) =>
+      request<{ message: string }>(`/projects/admin/${id}`, {
+        method: 'DELETE'
+      })
+  },
+
+  // VK Technology Apps
+  apps: {
+    getAll: async () =>
+      request<{ apps: any[] }>('/apps'),
+    getBySlug: async (slug: string) =>
+      request<{ app: any }>(`/apps/${slug}`),
+    getAdminAll: async () =>
+      request<{ apps: any[] }>('/apps/admin/all'),
+    create: async (data: any) =>
+      request<{ message: string; app: any }>('/apps/admin', {
+        method: 'POST',
+        body: JSON.stringify(data)
+      }),
+    update: async (id: number, data: any) =>
+      request<{ message: string; app: any }>(`/apps/admin/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(data)
+      }),
+    delete: async (id: number) =>
+      request<{ message: string }>(`/apps/admin/${id}`, {
+        method: 'DELETE'
+      })
+  },
+
+  // Analytics & Exports
+  analytics: {
+    getDashboard: async (startDate?: string, endDate?: string) => {
+      const q = new URLSearchParams();
+      if (startDate) q.append('startDate', startDate);
+      if (endDate) q.append('endDate', endDate);
+      return request<{ role: string; dateRange: any; domains: any }>(`/analytics/dashboard?${q.toString()}`);
+    },
+    downloadCsvUrl: (domain: string, startDate?: string, endDate?: string) => {
+      const q = new URLSearchParams({ domain });
+      if (startDate) q.append('startDate', startDate);
+      if (endDate) q.append('endDate', endDate);
+      return `${API_BASE}/analytics/export/csv?${q.toString()}`;
+    },
+    downloadExcelUrl: (startDate?: string, endDate?: string) => {
+      const q = new URLSearchParams();
+      if (startDate) q.append('startDate', startDate);
+      if (endDate) q.append('endDate', endDate);
+      return `${API_BASE}/analytics/export/excel?${q.toString()}`;
+    }
   }
 };

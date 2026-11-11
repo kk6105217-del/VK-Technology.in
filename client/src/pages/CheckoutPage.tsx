@@ -169,7 +169,7 @@ export const CheckoutPage: React.FC = () => {
     }
   };
 
-  const applyAddress = (addr: Address) => {
+  function applyAddress(addr: Address) {
     setCustomerName(addr.full_name);
     setCustomerPhone(addr.phone);
     setAddressLine1(addr.address_line1);
@@ -178,7 +178,7 @@ export const CheckoutPage: React.FC = () => {
     setCity(addr.city);
     setStateName(addr.state);
     setPostalCode(addr.postal_code);
-  };
+  }
 
   if (items.length === 0 && !confirmedOrder) {
     return (
@@ -1107,29 +1107,6 @@ export const CheckoutPage: React.FC = () => {
                     </p>
                   </div>
                 </label>
-
-                {/* 3. Cash on Delivery */}
-                <label className={`p-3.5 border rounded-lg flex items-start space-x-3 cursor-pointer transition ${
-                  paymentMethod === 'cod' ? 'border-amber-500 bg-amber-50/30 ring-1 ring-amber-400' : 'border-gray-200 hover:bg-gray-50'
-                }`}>
-                  <input
-                    type="radio"
-                    name="payment"
-                    value="cod"
-                    checked={paymentMethod === 'cod'}
-                    onChange={() => setPaymentMethod('cod')}
-                    className="mt-0.5 text-amber-500"
-                  />
-                  <div className="flex-1">
-                    <div className="flex items-center justify-between">
-                      <strong className="text-gray-900 text-sm">Cash on Delivery (COD)</strong>
-                      <span className="text-gray-500 text-xs">+₹40 handling fee</span>
-                    </div>
-                    <p className="text-gray-500 mt-1">
-                      Pay in cash or QR code scan directly to the courier executive upon physical delivery at your doorstep.
-                    </p>
-                  </div>
-                </label>
               </div>
 
               {/* Order Notes */}
@@ -1190,13 +1167,6 @@ export const CheckoutPage: React.FC = () => {
                   {baseShippingFee === 0 ? <strong className="text-emerald-700">FREE</strong> : `₹${baseShippingFee}`}
                 </span>
               </div>
-
-              {paymentMethod === 'cod' && (
-                <div className="flex justify-between text-orange-700">
-                  <span>Cash on Delivery Convenience Fee:</span>
-                  <span>+₹40</span>
-                </div>
-              )}
 
               <div className="pt-2 border-t border-gray-200 flex justify-between text-base font-extrabold text-gray-900">
                 <span>Total Payable:</span>

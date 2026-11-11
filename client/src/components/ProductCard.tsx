@@ -139,7 +139,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product }) => {
                 {currentPrice >= 999 ? 'FREE Delivery' : 'Standard Delivery'}
               </span>
               <span className="mx-1">•</span>
-              <span className="text-gray-500">Fast Dispatch</span>
+              <span className="text-gray-500">1-2 Weeks</span>
             </div>
 
             {/* Stock indicator */}

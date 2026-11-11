@@ -31,6 +31,9 @@ import { TrackOrderPage } from './pages/TrackOrderPage';
 import { ContactPage } from './pages/ContactPage';
 import { AboutPage } from './pages/AboutPage';
 import { LegalPolicyPage } from './pages/LegalPolicyPage';
+import { DiyProjectsPage } from './pages/DiyProjectsPage';
+import { ProjectDetailPage } from './pages/ProjectDetailPage';
+import { AppsPage } from './pages/AppsPage';
 
 // Admin Pages
 import { AdminLoginPage } from './pages/admin/AdminLoginPage';
@@ -46,6 +49,9 @@ import { AdminReviews } from './pages/admin/AdminReviews';
 import { AdminReports } from './pages/admin/AdminReports';
 import { AdminSettings } from './pages/admin/AdminSettings';
 import { AdminUpiPayments } from './pages/admin/AdminUpiPayments';
+import { AdminAnalytics } from './pages/admin/AdminAnalytics';
+import { AdminProjects } from './pages/admin/AdminProjects';
+import { AdminApps } from './pages/admin/AdminApps';
 import { AdminNotFoundPage } from './pages/admin/AdminNotFoundPage';
 
 import { Cpu, Search, Home, HelpCircle } from 'lucide-react';
@@ -132,6 +138,9 @@ export function App() {
                 <Route path="/admin" element={<AdminLayout />}>
                   <Route index element={<Navigate to="/admin/dashboard" replace />} />
                   <Route path="dashboard" element={<AdminDashboard />} />
+                  <Route path="analytics" element={<AdminAnalytics />} />
+                  <Route path="projects" element={<AdminProjects />} />
+                  <Route path="apps" element={<AdminApps />} />
                   <Route path="products" element={<AdminProducts />} />
                   <Route path="categories" element={<AdminCategories />} />
                   <Route path="inventory" element={<AdminInventory />} />
@@ -149,6 +158,10 @@ export function App() {
                 <Route path="/" element={<StoreLayout />}>
                   <Route index element={<HomePage />} />
                   <Route path="products" element={<ProductsPage />} />
+                  <Route path="projects" element={<DiyProjectsPage />} />
+                  <Route path="diy-projects" element={<DiyProjectsPage />} />
+                  <Route path="projects/:slug" element={<ProjectDetailPage />} />
+                  <Route path="apps" element={<AppsPage />} />
                   <Route path="category/:slug" element={<CategoryPage />} />
                   <Route path="product/:slug" element={<ProductDetailPage />} />
                   <Route path="cart" element={<CartPage />} />
@@ -160,6 +173,7 @@ export function App() {
                   <Route path="orders/:id" element={<OrderDetailPage />} />
                   <Route path="wishlist" element={<WishlistPage />} />
                   <Route path="track-order" element={<TrackOrderPage />} />
+                  <Route path="track" element={<TrackOrderPage />} />
 
                   {/* Informational & Legal */}
                   <Route path="contact" element={<ContactPage />} />

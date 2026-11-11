@@ -15,20 +15,20 @@ export const PincodeChecker: React.FC<PincodeCheckerProps> = ({ onPincodeChange 
 
     const prefix2 = code.substring(0, 2);
     let region = 'All India Express';
-    let days = '3-5 Business Days';
+    let days = '1-2 Weeks';
     let isLocal = false;
 
     if (['51', '52', '53'].includes(prefix2)) {
       region = 'Andhra Pradesh (Express Dispatch)';
-      days = '1-2 Business Days';
+      days = '1-2 Weeks';
       isLocal = true;
     } else if (prefix2 === '50') {
       region = 'Telangana (Express Dispatch)';
-      days = '1-2 Business Days';
+      days = '1-2 Weeks';
       isLocal = true;
     } else if (['56', '57', '58', '59', '60', '61', '62', '63', '64', '67', '68', '69'].includes(prefix2)) {
       region = 'South India Zone';
-      days = '2-3 Business Days';
+      days = '1-2 Weeks';
     }
 
     return {
@@ -36,7 +36,7 @@ export const PincodeChecker: React.FC<PincodeCheckerProps> = ({ onPincodeChange 
       region,
       days,
       isLocal,
-      codAvailable: true,
+      codAvailable: false,
       freeShippingThreshold: 999
     };
   }
@@ -56,7 +56,7 @@ export const PincodeChecker: React.FC<PincodeCheckerProps> = ({ onPincodeChange 
     <div className="bg-gray-50 border border-gray-200 rounded-lg p-3.5 text-xs text-gray-700">
       <div className="flex items-center space-x-1.5 font-bold text-gray-800 mb-2">
         <MapPin size={16} className="text-amber-500" />
-        <span>Check Delivery & Cash on Delivery Availability</span>
+        <span>Check Delivery & Estimated Arrival</span>
       </div>
 
       <form onSubmit={handleCheck} className="flex gap-2 mb-2">
@@ -90,7 +90,7 @@ export const PincodeChecker: React.FC<PincodeCheckerProps> = ({ onPincodeChange 
 
           <div className="flex items-center text-gray-600">
             <Truck size={13} className="mr-1.5 text-blue-600 shrink-0" />
-            <span>FREE delivery on orders over ₹{result.freeShippingThreshold} • COD Available</span>
+            <span>FREE delivery on orders over ₹{result.freeShippingThreshold} • Estimated Delivery: 1-2 Weeks</span>
           </div>
         </div>
       )}

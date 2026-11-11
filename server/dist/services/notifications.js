@@ -34,6 +34,8 @@ function isValidWhatsAppNumber(phone) {
     return clean.length >= 10 && clean.length <= 15;
 }
 function formatWhatsAppCleanPhone(phone) {
+    if (!phone || typeof phone !== 'string')
+        return '';
     let clean = phone.replace(/[^0-9]/g, '');
     if (clean.length === 10) {
         clean = `91${clean}`;
@@ -324,17 +326,20 @@ async function sendOrderNotifications(order, orderDbId) {
     };
 }
 // Send Status Milestone Update to Customer
-async function sendOrderStatusUpdate(orderId, newStatus, trackingNumber) {
+async function sendOrderStatusUpdate(orderId, newStatus, trackingNumber, customNote) {
     try {
         const order = database_js_1.db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId);
         if (!order)
             return false;
-        const cleanPhone = formatWhatsAppCleanPhone(order.customerPhone);
+        const rawPhone = order.customer_phone || order.customerPhone || '';
+        const cleanPhone = formatWhatsAppCleanPhone(rawPhone);
         const trackingMsg = trackingNumber ? `Tracking No: ${trackingNumber}\n` : '';
+        const noteMsg = customNote ? `Note: ${customNote}\n` : '';
         const message = `📦 *VK Technology - Order Status Update*\n\n` +
             `Hello ${order.customer_name},\n` +
             `Your order *#${order.order_number}* is now: *${newStatus.toUpperCase()}*!\n` +
             `${trackingMsg}` +
+            `${noteMsg}` +
             `Track your package here: ${config_js_1.config.frontendUrl}/orders\n\n` +
             `Thank you for building with VK Technology!`;
         // Attempt official WhatsApp if configured

@@ -120,12 +120,17 @@ cartRouter.post('/items', optionalToken, (req: AuthenticatedRequest, res: Respon
 });
 
 // Update Item Quantity
-cartRouter.put('/items/:productId', optionalToken, (req: AuthenticatedRequest, res: Response) => {
+const handleUpdateQuantity = (req: AuthenticatedRequest, res: Response) => {
   try {
     const { quantity } = req.body;
-    const productId = req.params.productId;
+    const productId = req.params.productId || req.body.product_id || req.body.productId;
     const guestId = req.headers['x-guest-id'] as string;
     const userId = req.user ? req.user.id : undefined;
+
+    if (!productId) {
+      res.status(400).json({ error: 'Product ID is required.' });
+      return;
+    }
 
     if (quantity <= 0) {
       const cartId = getOrCreateCart(userId, guestId);
@@ -147,7 +152,9 @@ cartRouter.put('/items/:productId', optionalToken, (req: AuthenticatedRequest, r
   } catch (error: any) {
     res.status(500).json({ error: 'Failed to update cart.' });
   }
-});
+};
+cartRouter.put('/items/:productId', optionalToken, handleUpdateQuantity);
+cartRouter.put('/items', optionalToken, handleUpdateQuantity);
 
 // Remove item from cart
 cartRouter.delete('/items/:productId', optionalToken, (req: AuthenticatedRequest, res: Response) => {

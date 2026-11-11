@@ -325,6 +325,73 @@ export function initDatabase() {
       details TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+
+    CREATE TABLE IF NOT EXISTS projects (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      slug TEXT UNIQUE NOT NULL,
+      title TEXT NOT NULL,
+      short_description TEXT,
+      description TEXT NOT NULL,
+      category TEXT NOT NULL,
+      difficulty TEXT NOT NULL DEFAULT 'Beginner',
+      estimated_time TEXT NOT NULL DEFAULT '2-3 Hours',
+      image_url TEXT NOT NULL,
+      circuit_diagram_url TEXT,
+      code_url TEXT,
+      youtube_url TEXT,
+      view_count INTEGER NOT NULL DEFAULT 0,
+      is_featured INTEGER NOT NULL DEFAULT 0,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS project_components (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id INTEGER NOT NULL,
+      product_id INTEGER,
+      name TEXT NOT NULL,
+      quantity INTEGER NOT NULL DEFAULT 1,
+      notes TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+      FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE SET NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS apps (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      slug TEXT UNIQUE NOT NULL,
+      name TEXT NOT NULL,
+      short_description TEXT,
+      description TEXT NOT NULL,
+      platform TEXT NOT NULL DEFAULT 'Android & Web',
+      status TEXT NOT NULL DEFAULT 'Coming Soon',
+      version TEXT NOT NULL DEFAULT '1.0.0',
+      icon TEXT,
+      image_url TEXT NOT NULL,
+      download_url TEXT,
+      play_store_url TEXT,
+      web_url TEXT,
+      features_json TEXT,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS inventory_movements (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id INTEGER NOT NULL,
+      change_type TEXT NOT NULL,
+      quantity_change INTEGER NOT NULL,
+      previous_quantity INTEGER NOT NULL,
+      new_quantity INTEGER NOT NULL,
+      reason TEXT,
+      reference_id TEXT,
+      created_by TEXT NOT NULL DEFAULT 'System',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE CASCADE
+    );
   `);
 
   // Migrate columns if table already existed
@@ -352,27 +419,30 @@ export function recordAuditLog(adminEmail: string, action: string, targetType: s
 
 function seedInitialData() {
   try {
-  // 1. Ensure Admin Accounts exist
-  const adminList = [
-    { email: 'admin@vktechnology.shop', name: 'Karthik Suroju (VK Technology)' },
-    { email: 'karthik.suroju@gmail.com', name: 'Karthik Suroju (VK Technology)' },
-    { email: config.adminEmail, name: 'Karthik Suroju (VK Technology)' }
+  // 1. Ensure Admin and Staff Accounts exist with 4-Role RBAC
+  const staffList = [
+    { email: 'karthik.suroju@gmail.com', name: 'S. J. V. Karthik (Owner)', role: 'SUPER_ADMIN' },
+    { email: 'admin@vktechnology.shop', name: 'VK Technology Administrator', role: 'SUPER_ADMIN' },
+    { email: config.adminEmail, name: 'S. J. V. Karthik (VK Technology)', role: 'SUPER_ADMIN' },
+    { email: 'product@vktechnology.shop', name: 'Product Manager', role: 'PRODUCT_MANAGER' },
+    { email: 'orders@vktechnology.shop', name: 'Order & Shipping Manager', role: 'ORDER_MANAGER' },
+    { email: 'inventory@vktechnology.shop', name: 'Warehouse & Inventory Manager', role: 'INVENTORY_MANAGER' }
   ];
 
-  for (const adm of adminList) {
-    if (!adm.email) continue;
-    const existingAdmin = db.prepare('SELECT id, password_hash FROM users WHERE email = ?').get(adm.email) as any;
-    if (!existingAdmin) {
+  for (const staff of staffList) {
+    if (!staff.email) continue;
+    const existing = db.prepare('SELECT id, role FROM users WHERE email = ?').get(staff.email) as any;
+    if (!existing) {
       const salt = bcrypt.genSaltSync(10);
       const hash = bcrypt.hashSync(config.adminInitialPassword || 'Admin@VK2026!', salt);
       db.prepare(`
         INSERT INTO users (email, password_hash, full_name, phone, role)
-        VALUES (?, ?, ?, ?, 'admin')
-      `).run(adm.email, hash, adm.name, '+918555997052');
-      console.log(`Admin user created: ${adm.email}`);
+        VALUES (?, ?, ?, ?, ?)
+      `).run(staff.email, hash, staff.name, '+918555997052', staff.role);
+      console.log(`Staff account created: ${staff.email} (${staff.role})`);
     } else {
-      // Ensure role is admin
-      db.prepare(`UPDATE users SET role = 'admin' WHERE id = ?`).run(existingAdmin.id);
+      // Update role to ensure correct RBAC
+      db.prepare(`UPDATE users SET role = ? WHERE id = ?`).run(staff.role, existing.id);
     }
   }
 
@@ -380,18 +450,20 @@ function seedInitialData() {
   const defaultSettings: Record<string, string> = {
     store_name: 'VK Technology',
     owner_email: 'karthik.suroju@gmail.com',
-    owner_name: 'Karthik Suroju',
+    owner_name: 'S. J. V. Karthik',
     business_phone: '+91 8555997052',
-    business_address: 'India',
+    business_address: 'Pedamiram, West Godavari, Andhra Pradesh, India',
+    owner_location: 'Pedamiram, West Godavari, Andhra Pradesh, India',
     currency_code: 'INR',
     currency_symbol: '₹',
     standard_shipping_fee: '60',
     free_shipping_threshold: '999',
-    cod_available: 'true',
-    cod_fee: '40',
-    estimated_dispatch: '1-2 Business Days',
+    cod_available: 'false',
+    cod_fee: '0',
+    estimated_dispatch: '1-2 Weeks',
+    delivery_notice: 'FREE delivery on orders over ₹999 • Estimated Delivery: 1-2 Weeks',
     support_hours: 'Monday - Saturday: 9:00 AM - 8:00 PM IST',
-    announcement_text: 'Free Express Delivery across India on orders above ₹999! Special Discounts for Engineering Students.',
+    announcement_text: 'FREE delivery on orders over ₹999 • Estimated Delivery: 1-2 Weeks',
     owner_whatsapp_number: '+91 8555997052',
     upi_qr_enabled: 'true',
     upi_id: '8555997052@ibl',
@@ -401,9 +473,16 @@ function seedInitialData() {
 
   const getSettingStmt = db.prepare('SELECT id FROM website_settings WHERE key = ?');
   const insertSettingStmt = db.prepare('INSERT INTO website_settings (key, value) VALUES (?, ?)');
+  const updateSettingStmt = db.prepare("UPDATE website_settings SET value = ?, updated_at = datetime('now') WHERE key = ?");
+
   for (const [key, val] of Object.entries(defaultSettings)) {
     if (!getSettingStmt.get(key)) {
       insertSettingStmt.run(key, val);
+    } else {
+      // Enforce critical updated settings
+      if (['store_name', 'owner_name', 'owner_email', 'business_address', 'owner_location', 'cod_available', 'estimated_dispatch', 'delivery_notice', 'announcement_text', 'owner_whatsapp_number'].includes(key)) {
+        updateSettingStmt.run(val, key);
+      }
     }
   }
 
@@ -593,6 +672,15 @@ function seedInitialData() {
   if (existingProducts.count === 0) {
     seedProducts();
   }
+
+  // 7. Ensure Projects exist (13 DIY Projects)
+  seedProjects();
+
+  // 8. Ensure Apps exist (7 Apps)
+  seedApps();
+
+  // 9. Ensure Inventory Movements exist
+  seedInventoryMovements();
   } catch (err) {
     console.warn('[DB] Non-critical warning in seedInitialData:', err);
   }
@@ -1584,5 +1672,499 @@ function seedProducts() {
   console.log(`Successfully seeded ${productsData.length} initial products with reviews & images.`);
   } catch (err) {
     console.warn('[DB] Non-critical warning in seedProducts:', err);
+  }
+}
+
+function seedProjects() {
+  try {
+    const existing = db.prepare('SELECT COUNT(*) as count FROM projects').get() as { count: number };
+    if (existing && existing.count >= 13) return;
+
+    const insertProject = db.prepare(`
+      INSERT OR IGNORE INTO projects (
+        slug, title, short_description, description, category,
+        difficulty, estimated_time, image_url, circuit_diagram_url,
+        code_url, youtube_url, is_featured, is_active
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+    `);
+
+    const insertComponent = db.prepare(`
+      INSERT INTO project_components (project_id, name, quantity, notes)
+      VALUES (?, ?, ?, ?)
+    `);
+
+    const projectsList = [
+      {
+        slug: 'smart-irrigation-system',
+        title: 'Smart Irrigation System',
+        category: 'IoT & Smart Agriculture',
+        difficulty: 'Beginner',
+        estimated_time: '2-3 Hours',
+        short_description: 'Automatic soil moisture detection and automated plant watering using ESP8266 / Arduino and 5V mini water pump.',
+        description: 'The Smart Irrigation System monitors soil moisture levels using a capacitive soil moisture sensor. When moisture drops below a calibrated threshold, the microcontroller triggers a 5V relay to activate a submersible pump. Once moisture is replenished, the pump turns off automatically, preventing water wastage and protecting plants.',
+        image_url: 'https://images.unsplash.com/photo-1558346490-a72e53ae2d4f?auto=format&fit=crop&w=800&q=80',
+        circuit_diagram_url: '/circuit-diagrams/smart-irrigation.png',
+        code_url: 'https://github.com/vk-technology/smart-irrigation-system',
+        youtube_url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+        is_featured: 1,
+        components: [
+          { name: 'ESP8266 NodeMCU Wi-Fi Module', quantity: 1, notes: 'Or Arduino Uno' },
+          { name: 'Capacitive Soil Moisture Sensor v1.2', quantity: 1, notes: 'Corrosion resistant' },
+          { name: '1-Channel 5V Relay Module', quantity: 1, notes: 'Optocoupler isolated' },
+          { name: '5V Mini Submersible Water Pump with Pipe', quantity: 1, notes: 'Includes 1m vinyl tubing' },
+          { name: 'Jumper Wires (Male-to-Female)', quantity: 10, notes: 'Breadboard hookup' }
+        ]
+      },
+      {
+        slug: 'iot-weather-station',
+        title: 'IoT Weather Station',
+        category: 'IoT & Environmental',
+        difficulty: 'Intermediate',
+        estimated_time: '3-4 Hours',
+        short_description: 'Cloud-connected environmental telemetry station measuring temperature, humidity, and barometric pressure with OLED display.',
+        description: 'Captures ambient temperature and relative humidity with a DHT22 sensor, alongside atmospheric pressure via BMP280. Data is formatted on a 0.96 inch I2C OLED display and continuously pushed to an MQTT or Blynk IoT cloud dashboard over Wi-Fi.',
+        image_url: 'https://images.unsplash.com/photo-1517077304055-6e89abbf09b0?auto=format&fit=crop&w=800&q=80',
+        circuit_diagram_url: '/circuit-diagrams/weather-station.png',
+        code_url: 'https://github.com/vk-technology/iot-weather-station',
+        youtube_url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+        is_featured: 1,
+        components: [
+          { name: 'ESP32 Development Board (30-pin)', quantity: 1, notes: 'Dual-core Wi-Fi + BLE' },
+          { name: 'DHT22 Digital Temperature & Humidity Sensor', quantity: 1, notes: 'High accuracy' },
+          { name: 'BMP280 Barometric Pressure & Altitude Sensor', quantity: 1, notes: 'I2C communication' },
+          { name: '0.96 inch I2C Monochrome OLED Display (128x64)', quantity: 1, notes: 'SSD1306 driver' },
+          { name: 'Half-size Solderless Breadboard', quantity: 1, notes: 'Prototyping base' }
+        ]
+      },
+      {
+        slug: 'obstacle-avoiding-robot',
+        title: 'Obstacle Avoiding Robot',
+        category: 'Robotics & STEM',
+        difficulty: 'Beginner',
+        estimated_time: '2-4 Hours',
+        short_description: 'Autonomous 2WD navigation rover utilizing HC-SR04 ultrasonic echo detection and servo angle scanning.',
+        description: 'An autonomous wheeled robot that navigates environments collision-free. An HC-SR04 ultrasonic sensor mounted on an SG90 servo motor scans left and right when an obstacle is detected within 25cm. The Arduino micro-controller computes the clearest escape vector and commands the L298N motor driver to pivot accordingly.',
+        image_url: 'https://images.unsplash.com/photo-1485827404703-89b55fcc595e?auto=format&fit=crop&w=800&q=80',
+        circuit_diagram_url: '/circuit-diagrams/obstacle-robot.png',
+        code_url: 'https://github.com/vk-technology/obstacle-avoiding-robot',
+        youtube_url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+        is_featured: 1,
+        components: [
+          { name: 'Arduino Uno R3 Compatible Board', quantity: 1, notes: 'ATmega328P with USB cable' },
+          { name: 'L298N Dual H-Bridge Motor Driver Module', quantity: 1, notes: 'High power 2A per channel' },
+          { name: 'HC-SR04 Ultrasonic Distance Sensor', quantity: 1, notes: '2cm - 400cm range' },
+          { name: 'SG90 9g Micro Servo Motor', quantity: 1, notes: 'Ultrasonic turret mount' },
+          { name: '2WD Smart Robot Chassis Kit with TT Motors & Wheels', quantity: 1, notes: 'Dual gear motors + caster wheel' },
+          { name: '2x 18650 Battery Holder with Switch', quantity: 1, notes: '7.4V motor power source' }
+        ]
+      },
+      {
+        slug: 'bluetooth-controlled-car',
+        title: 'Bluetooth Controlled Car',
+        category: 'Robotics & Wireless',
+        difficulty: 'Beginner',
+        estimated_time: '2-3 Hours',
+        short_description: 'Smartphone wireless remote RC robotic vehicle interfaced via HC-05 Bluetooth transceiver and motor driver.',
+        description: 'Turn your Android smartphone into an interactive steering remote for a physical robot car. Utilizing the HC-05 serial UART Bluetooth module, directional commands (Forward, Reverse, Left, Right, Stop) and speed PWM values are relayed wirelessly to the Arduino Uno to navigate in real-time.',
+        image_url: 'https://images.unsplash.com/photo-1558346490-a72e53ae2d4f?auto=format&fit=crop&w=800&q=80',
+        circuit_diagram_url: '/circuit-diagrams/bluetooth-car.png',
+        code_url: 'https://github.com/vk-technology/bluetooth-rc-car',
+        youtube_url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+        is_featured: 1,
+        components: [
+          { name: 'Arduino Uno R3 Compatible Board', quantity: 1, notes: 'Brain microcontroller' },
+          { name: 'HC-05 Wireless Bluetooth Serial Module', quantity: 1, notes: 'Master/Slave UART' },
+          { name: 'L298N Dual H-Bridge Motor Driver', quantity: 1, notes: 'Controls speed and direction' },
+          { name: '4WD Smart Robot Chassis Kit with 4 Motors', quantity: 1, notes: 'Heavy duty acrylic chassis' },
+          { name: '18650 Li-ion Rechargeable Battery Pack (7.4V)', quantity: 1, notes: 'Main power supply' }
+        ]
+      },
+      {
+        slug: 'esp32-cam-security-surveillance',
+        title: 'ESP32-CAM Security Surveillance',
+        category: 'IoT & Security',
+        difficulty: 'Intermediate',
+        estimated_time: '3-4 Hours',
+        short_description: 'Wireless video surveillance camera with PIR motion detection, MicroSD card recording, and live web streaming.',
+        description: 'Build a compact wireless home security camera using the ESP32-CAM board with an OV2640 2MP lens. The system runs an onboard HTTP MJPEG video streaming server, detects intrusions using an HC-SR501 passive infrared sensor, saves photographic snapshots to MicroSD, and transmits instant notifications.',
+        image_url: 'https://images.unsplash.com/photo-1557597774-9d273605dfa9?auto=format&fit=crop&w=800&q=80',
+        circuit_diagram_url: '/circuit-diagrams/esp32-cam.png',
+        code_url: 'https://github.com/vk-technology/esp32-cam-surveillance',
+        youtube_url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+        is_featured: 1,
+        components: [
+          { name: 'ESP32-CAM Development Board with OV2640 Camera', quantity: 1, notes: 'Integrated Wi-Fi & Bluetooth' },
+          { name: 'FT232RL FTDI USB to TTL Serial Programmer', quantity: 1, notes: 'For flashing firmware' },
+          { name: 'HC-SR501 PIR Motion Sensor Module', quantity: 1, notes: 'Pyroelectric infrared motion detection' },
+          { name: '16GB Class 10 MicroSD Card', quantity: 1, notes: 'Local photo/video storage' },
+          { name: '5V 2A DC Micro-USB Power Adapter', quantity: 1, notes: 'Stable power supply' }
+        ]
+      },
+      {
+        slug: 'smart-home-automation-relay-blynk',
+        title: 'Smart Home Automation with Relay & Blynk',
+        category: 'Home Automation',
+        difficulty: 'Intermediate',
+        estimated_time: '3-5 Hours',
+        short_description: '4-channel Wi-Fi appliance controller with smartphone cloud dashboard, physical switch feedback, and voice assistant support.',
+        description: 'Remotely control lights, fans, and home appliances from anywhere in the world using an ESP8266/ESP32 running Blynk IoT cloud firmware. The circuit features manual toggle switch integration with debounce protection so appliances can still be operated locally if the internet connection is interrupted.',
+        image_url: 'https://images.unsplash.com/photo-1558002038-1055907df827?auto=format&fit=crop&w=800&q=80',
+        circuit_diagram_url: '/circuit-diagrams/home-automation.png',
+        code_url: 'https://github.com/vk-technology/smart-home-automation',
+        youtube_url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+        is_featured: 1,
+        components: [
+          { name: 'NodeMCU ESP8266 Wi-Fi Development Board', quantity: 1, notes: 'Cloud IoT controller' },
+          { name: '4-Channel 5V Optocoupler Relay Module', quantity: 1, notes: '10A 250V AC contact ratings' },
+          { name: 'HLK-PM01 230V AC to 5V DC Step Down Power Module', quantity: 1, notes: 'Direct mains power supply' },
+          { name: 'Push Buttons / Toggle Wall Switches', quantity: 4, notes: 'Manual override' }
+        ]
+      },
+      {
+        slug: 'soil-moisture-sensor-oled-display',
+        title: 'Soil Moisture Sensor with OLED Display',
+        category: 'STEM & Agriculture',
+        difficulty: 'Beginner',
+        estimated_time: '1-2 Hours',
+        short_description: 'Handheld digital soil moisture hygrometer with real-time percentage readout on crisp 0.96 inch I2C OLED display.',
+        description: 'A compact diagnostic tool for gardeners, agronomists, and indoor plant enthusiasts. Using an analog-to-digital conversion curve, the Arduino Nano samples soil dielectric permittivity via a corrosion-resistant capacitive probe and displays volumetric moisture percentages alongside interactive progress bar graphics.',
+        image_url: 'https://images.unsplash.com/photo-1581092160607-ee22621dd758?auto=format&fit=crop&w=800&q=80',
+        circuit_diagram_url: '/circuit-diagrams/soil-oled.png',
+        code_url: 'https://github.com/vk-technology/soil-moisture-oled',
+        youtube_url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+        is_featured: 0,
+        components: [
+          { name: 'Arduino Nano V3 (CH340G)', quantity: 1, notes: 'Compact microcontroller' },
+          { name: 'Capacitive Soil Moisture Sensor v1.2', quantity: 1, notes: 'Corrosion-proof PCB probe' },
+          { name: '0.96 inch I2C OLED Display (Blue)', quantity: 1, notes: '128x64 pixels' },
+          { name: '9V Battery Snap with On/Off Switch', quantity: 1, notes: 'Portable handheld power' }
+        ]
+      },
+      {
+        slug: 'air-quality-monitoring-system-mq135',
+        title: 'Air Quality Monitoring System (MQ135)',
+        category: 'Environmental Monitoring',
+        difficulty: 'Beginner',
+        estimated_time: '2-3 Hours',
+        short_description: 'Indoor environmental safety monitor detecting harmful airborne gases, smoke, and CO2 with audible hazard alarm.',
+        description: 'Continuous indoor pollution detector measuring particulate gas concentrations including ammonia, sulfide, benzene vapors, smoke, and CO2. When gas concentration crosses user safety thresholds, an active piezoceramic buzzer alerts occupants while the 16x2 I2C LCD displays parts-per-million (PPM) readings.',
+        image_url: 'https://images.unsplash.com/photo-1581092335397-9583fe92d232?auto=format&fit=crop&w=800&q=80',
+        circuit_diagram_url: '/circuit-diagrams/air-quality.png',
+        code_url: 'https://github.com/vk-technology/air-quality-mq135',
+        youtube_url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+        is_featured: 0,
+        components: [
+          { name: 'Arduino Uno R3 Compatible Board', quantity: 1, notes: 'Standard MCU' },
+          { name: 'MQ-135 Hazardous Gas & Air Quality Sensor Module', quantity: 1, notes: 'Heated tin dioxide sensor' },
+          { name: '16x2 Character LCD with I2C Backpack', quantity: 1, notes: 'PCF8574 I2C adapter' },
+          { name: '5V Active Buzzer Module', quantity: 1, notes: 'Audible alarm' },
+          { name: 'Red and Green 5mm Diffused LEDs', quantity: 2, notes: 'Safe / Warning indicators' }
+        ]
+      },
+      {
+        slug: 'smart-dustbin-ultrasonic-servo',
+        title: 'Smart Dustbin with Ultrasonic Sensor & Servo',
+        category: 'DIY & STEM Projects',
+        difficulty: 'Beginner',
+        estimated_time: '1-2 Hours',
+        short_description: 'Contactless automated waste bin with ultrasonic hand proximity detection and SG90 servo lid articulation.',
+        description: 'A sanitary contactless smart trash bin designed for homes, hospitals, and electronics labs. When an approaching hand is detected within 15 centimeters of the HC-SR04 sonar module, the Arduino drives an SG90 micro-servo arm 90 degrees to open the lid, waits 4 seconds, and gently lowers the lid automatically.',
+        image_url: 'https://images.unsplash.com/photo-1532996122724-e3c354a0b15b?auto=format&fit=crop&w=800&q=80',
+        circuit_diagram_url: '/circuit-diagrams/smart-dustbin.png',
+        code_url: 'https://github.com/vk-technology/smart-dustbin',
+        youtube_url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+        is_featured: 0,
+        components: [
+          { name: 'Arduino Nano V3 Microcontroller', quantity: 1, notes: 'Compact form factor' },
+          { name: 'HC-SR04 Ultrasonic Sensor Module', quantity: 1, notes: 'Sonar detection' },
+          { name: 'TowerPro SG90 9g Micro Servo Motor', quantity: 1, notes: 'Lid actuator' },
+          { name: '4x AA Battery Holder with DC Jack', quantity: 1, notes: '6V battery power' }
+        ]
+      },
+      {
+        slug: 'automatic-street-light-ldr',
+        title: 'Automatic Street Light using LDR',
+        category: 'Electronics Basics',
+        difficulty: 'Beginner',
+        estimated_time: '1 Hour',
+        short_description: 'Energy-efficient darkness-activated street illumination circuit with LDR photocell and transistor switching.',
+        description: 'An essential electronics benchmark project that automatically illuminates high-power white LEDs when daylight dims into dusk. An LDR light-dependent resistor forms a voltage divider whose output drives a transistor or comparator stage, cutting off power in daytime to maximize energy conservation.',
+        image_url: 'https://images.unsplash.com/photo-1509395176047-4a66953fa231?auto=format&fit=crop&w=800&q=80',
+        circuit_diagram_url: '/circuit-diagrams/automatic-street-light.png',
+        code_url: 'https://github.com/vk-technology/automatic-street-light',
+        youtube_url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+        is_featured: 0,
+        components: [
+          { name: 'Light Dependent Resistor (LDR) 5mm Photocell', quantity: 2, notes: 'Light sensor' },
+          { name: 'BC547 NPN General Purpose Transistors', quantity: 2, notes: 'Darlington switch' },
+          { name: '10K Ohm Trimpot Potentiometer', quantity: 1, notes: 'Sensitivity calibration' },
+          { name: '1W High Power White LED Bead with Heatsink', quantity: 2, notes: 'Illumination source' },
+          { name: '12V 1A DC Wall Power Adapter', quantity: 1, notes: 'Mains adapter' }
+        ]
+      },
+      {
+        slug: 'rfid-attendance-door-lock-system',
+        title: 'RFID Attendance & Door Lock System',
+        category: 'Embedded Security',
+        difficulty: 'Intermediate',
+        estimated_time: '3-4 Hours',
+        short_description: 'Secure contactless access control with 13.56 MHz RC522 reader, solenoid deadbolt latch, and LCD status indicator.',
+        description: 'An access control and employee/student attendance logger. Users scan an authorized 13.56 MHz RFID card or key fob near the RC522 reader. If the unique identifier (UID) matches the authorized whitelist, the Arduino energizes a 12V solenoid door strike, beeps a success tone, and greets the user by name on an I2C LCD.',
+        image_url: 'https://images.unsplash.com/photo-1558002038-1055907df827?auto=format&fit=crop&w=800&q=80',
+        circuit_diagram_url: '/circuit-diagrams/rfid-lock.png',
+        code_url: 'https://github.com/vk-technology/rfid-door-lock',
+        youtube_url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+        is_featured: 1,
+        components: [
+          { name: 'Arduino Uno R3 Compatible Board', quantity: 1, notes: 'Processing unit' },
+          { name: 'RC522 13.56MHz RFID Reader with Tag & Card', quantity: 1, notes: 'SPI interface' },
+          { name: '12V DC Solenoid Electric Door Lock Latch', quantity: 1, notes: 'Electronic strike' },
+          { name: '1-Channel 5V Relay Module with Optocoupler', quantity: 1, notes: '12V solenoid isolation' },
+          { name: '16x2 Character LCD with I2C Module', quantity: 1, notes: 'User interface' }
+        ]
+      },
+      {
+        slug: 'gps-tracking-device-gsm-module',
+        title: 'GPS Tracking Device with GSM Module',
+        category: 'Telemetry & IoT',
+        difficulty: 'Advanced',
+        estimated_time: '4-6 Hours',
+        short_description: 'Real-time vehicle asset tracker transmitting GPS satellite latitude/longitude coordinates and Google Maps links via GSM SMS.',
+        description: 'A tracking system for fleets, vehicles, and assets. The u-blox NEO-6M GPS receiver acquires satellite position fixes and parses NMEA sentences. When queried via an incoming SMS telephone ring or at configured intervals, the SIM800L module formats an instant SMS reply containing clickable Google Maps coordinates.',
+        image_url: 'https://images.unsplash.com/photo-1558346490-a72e53ae2d4f?auto=format&fit=crop&w=800&q=80',
+        circuit_diagram_url: '/circuit-diagrams/gps-gsm-tracker.png',
+        code_url: 'https://github.com/vk-technology/gps-gsm-tracker',
+        youtube_url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+        is_featured: 1,
+        components: [
+          { name: 'Arduino Nano V3 Microcontroller', quantity: 1, notes: 'NMEA sentence parser' },
+          { name: 'u-blox NEO-6M GPS Module with Ceramic Antenna', quantity: 1, notes: 'Satellite navigation' },
+          { name: 'SIM800L GPRS GSM Quad-Band Micro-SIM Module', quantity: 1, notes: 'Cellular network transceiver' },
+          { name: 'LM2596 DC-DC Step Down Buck Converter', quantity: 1, notes: '4.0V 2A high current GSM power' }
+        ]
+      },
+      {
+        slug: 'smart-energy-meter-lcd-display',
+        title: 'Smart Energy Meter with LCD Display',
+        category: 'Power Electronics',
+        difficulty: 'Intermediate',
+        estimated_time: '3-4 Hours',
+        short_description: 'AC mains electricity consumption meter monitoring instantaneous current, RMS voltage, active wattage, and cumulative kWh.',
+        description: 'Measure AC power consumption of household or lab appliances with non-invasive sensors. An ACS712 Hall-effect current sensor and ZMPT101B AC voltage transformer compute true RMS power factors and display wattage and running electricity costs on an I2C 16x2 LCD screen.',
+        image_url: 'https://images.unsplash.com/photo-1517077304055-6e89abbf09b0?auto=format&fit=crop&w=800&q=80',
+        circuit_diagram_url: '/circuit-diagrams/energy-meter.png',
+        code_url: 'https://github.com/vk-technology/smart-energy-meter',
+        youtube_url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+        is_featured: 0,
+        components: [
+          { name: 'Arduino Uno R3 Compatible Board', quantity: 1, notes: 'ADC sampling' },
+          { name: 'ACS712 20A Current Sensor Module', quantity: 1, notes: 'Hall effect isolation' },
+          { name: 'ZMPT101B AC Single Phase Voltage Sensor Module', quantity: 1, notes: 'Mains voltage transformer' },
+          { name: '16x2 Character LCD with I2C Backpack', quantity: 1, notes: 'Real-time telemetry readout' }
+        ]
+      }
+    ];
+
+    for (const p of projectsList) {
+      const existingProj = db.prepare('SELECT id FROM projects WHERE slug = ?').get(p.slug) as any;
+      let projectId = existingProj?.id;
+      if (!projectId) {
+        const res = insertProject.run(
+          p.slug, p.title, p.short_description, p.description, p.category,
+          p.difficulty, p.estimated_time, p.image_url, p.circuit_diagram_url,
+          p.code_url, p.youtube_url, p.is_featured
+        );
+        projectId = Number(res.lastInsertRowid);
+        for (const comp of p.components) {
+          insertComponent.run(projectId, comp.name, comp.quantity, comp.notes);
+        }
+      }
+    }
+    console.log('[DB] 13 DIY Projects seeded successfully.');
+  } catch (err) {
+    console.warn('[DB] Non-critical warning in seedProjects:', err);
+  }
+}
+
+function seedApps() {
+  try {
+    const existing = db.prepare('SELECT COUNT(*) as count FROM apps').get() as { count: number };
+    if (existing && existing.count >= 7) return;
+
+    const insertApp = db.prepare(`
+      INSERT OR IGNORE INTO apps (
+        slug, name, short_description, description, platform,
+        status, version, icon, image_url, features_json, sort_order, is_active
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+    `);
+
+    const appsList = [
+      {
+        slug: 'vk-iot-monitor',
+        name: 'VK IoT Monitor',
+        short_description: 'Real-time cloud telemetry and hardware monitoring companion for ESP32, ESP8266, and Raspberry Pi projects.',
+        description: 'VK IoT Monitor connects directly to your cloud brokers and MQTT servers to plot live sensor graphs, track device online/offline heartbeat status, and alert you whenever metrics exceed safe operational limits.',
+        platform: 'Android & Web',
+        status: 'Coming Soon',
+        version: '1.0.0',
+        icon: 'Activity',
+        image_url: 'https://images.unsplash.com/photo-1558346490-a72e53ae2d4f?auto=format&fit=crop&w=800&q=80',
+        features_json: JSON.stringify([
+          'Real-time MQTT & WebSocket data streaming',
+          'Dynamic multi-channel time-series charts',
+          'Custom push notifications for sensor threshold alerts',
+          'Export telemetry logs in CSV format'
+        ]),
+        sort_order: 1
+      },
+      {
+        slug: 'vk-smart-home-controller',
+        name: 'VK Smart Home Controller',
+        short_description: 'Ultra-low latency appliance controller for lights, relays, fans, and home automation systems.',
+        description: 'Turn your smartphone into a central automation hub. Designed for seamless local network (LAN) control or encrypted cloud bridging with zero lag, room grouping, and timer automation.',
+        platform: 'Android / iOS / Web',
+        status: 'Coming Soon',
+        version: '1.0.0',
+        icon: 'Home',
+        image_url: 'https://images.unsplash.com/photo-1558002038-1055907df827?auto=format&fit=crop&w=800&q=80',
+        features_json: JSON.stringify([
+          'Instant LAN discovery of VK smart relays',
+          'Custom room grouping and scene presets',
+          'Daily scheduling and dawn/dusk automations',
+          'Biometric app lock for home security'
+        ]),
+        sort_order: 2
+      },
+      {
+        slug: 'vk-esp32-controller',
+        name: 'VK ESP32 Controller',
+        short_description: 'Wi-Fi & BLE configuration, pin toggling, and OTA firmware updater for ESP32 and ESP8266 microcontrollers.',
+        description: 'A developer powerhouse utility that detects nearby ESP32 and ESP8266 devices over Bluetooth Low Energy (BLE), configures their Wi-Fi credentials in seconds, and supports over-the-air (OTA) binary firmware flashing without opening the Arduino IDE.',
+        platform: 'Android',
+        status: 'Coming Soon',
+        version: '1.0.0',
+        icon: 'Cpu',
+        image_url: 'https://images.unsplash.com/photo-1517077304055-6e89abbf09b0?auto=format&fit=crop&w=800&q=80',
+        features_json: JSON.stringify([
+          'Fast BLE provisioner for Wi-Fi SSID and passwords',
+          'Over-The-Air (OTA) firmware binary flashing',
+          'GPIO interactive pin state viewer and PWM sliders',
+          'Serial monitor terminal over Bluetooth'
+        ]),
+        sort_order: 3
+      },
+      {
+        slug: 'vk-sensor-dashboard',
+        name: 'VK Sensor Dashboard',
+        short_description: 'Interactive analytics gauges and real-time visualization for environmental, biometric, and power sensors.',
+        description: 'Transform raw analog and I2C sensor data into stunning radial gauges, heatmaps, and statistical distributions. Perfect for environmental stations, soil moisture arrays, and STEM science fair presentations.',
+        platform: 'Android & Web',
+        status: 'Coming Soon',
+        version: '1.0.0',
+        icon: 'Gauge',
+        image_url: 'https://images.unsplash.com/photo-1581092160607-ee22621dd758?auto=format&fit=crop&w=800&q=80',
+        features_json: JSON.stringify([
+          'Customizable drag-and-drop dashboard widgets',
+          'Support for 40+ popular sensors (DHT22, BMP280, MQ-135, ACS712)',
+          'Dark mode optimized for lab and nighttime monitoring',
+          'Offline caching with automatic cloud sync'
+        ]),
+        sort_order: 4
+      },
+      {
+        slug: 'vk-robotics-remote',
+        name: 'VK Robotics Remote',
+        short_description: 'Dual-stick virtual joystick and Bluetooth/Wi-Fi gamepad for robot rovers, RC cars, and robotic arms.',
+        description: 'A high-performance controller interface featuring dual responsive virtual joysticks, configurable button pads, gyro tilt-steering, and real-time telemetry overlays for DIY robotics enthusiasts.',
+        platform: 'Android',
+        status: 'Coming Soon',
+        version: '1.0.0',
+        icon: 'Gamepad2',
+        image_url: 'https://images.unsplash.com/photo-1485827404703-89b55fcc595e?auto=format&fit=crop&w=800&q=80',
+        features_json: JSON.stringify([
+          'Dual precision analog joysticks with deadzone tuning',
+          'Bluetooth Classic (SPP), BLE, and UDP Wi-Fi protocols',
+          'Sensor telemetry HUD overlay (battery voltage, obstacle distance)',
+          'Customizable button layout and macro sequencing'
+        ]),
+        sort_order: 5
+      },
+      {
+        slug: 'vk-drone-telemetry-viewer',
+        name: 'VK Drone Telemetry Viewer',
+        short_description: 'Flight instruments HUD, GPS satellite map, attitude indicator, and battery monitor for DIY quadcopters.',
+        description: 'Connects to your drone flight controller via telemetry radio or Wi-Fi to display artificial horizon, altitude, airspeed, heading, GPS satellite lock status, and safety failsafe return-to-home boundaries.',
+        platform: 'Android & Web',
+        status: 'Coming Soon',
+        version: '1.0.0',
+        icon: 'Radio',
+        image_url: 'https://images.unsplash.com/photo-1508614589041-895b88991e3e?auto=format&fit=crop&w=800&q=80',
+        features_json: JSON.stringify([
+          'Artificial horizon (attitude indicator) with pitch & roll',
+          'Real-time GPS satellite map with waypoint path overlay',
+          'Cell voltage and battery consumption alarms',
+          'Flight log recorder and KML exporter'
+        ]),
+        sort_order: 6
+      },
+      {
+        slug: 'vk-electronics-learning-hub',
+        name: 'VK Electronics Learning Hub',
+        short_description: 'Interactive pinout reference, resistor color code calculator, circuit simulators, and DIY project guides.',
+        description: 'The ultimate offline-capable engineering handbook. Inspect high-resolution pinout diagrams for Arduino, ESP32, and Raspberry Pi boards, compute Ohm’s law and 555 timer frequencies, and follow step-by-step assembly guides for all VK Technology project kits.',
+        platform: 'Android & Web',
+        status: 'Coming Soon',
+        version: '1.0.0',
+        icon: 'BookOpen',
+        image_url: 'https://images.unsplash.com/photo-1550751827-4bd374c3f58b?auto=format&fit=crop&w=800&q=80',
+        features_json: JSON.stringify([
+          'Interactive pinout diagrams for 30+ popular development boards',
+          '4-band, 5-band, and SMD resistor code calculators',
+          'Inductor, capacitor, and voltage divider calculators',
+          'Curated DIY project tutorials with downloadable schematics'
+        ]),
+        sort_order: 7
+      }
+    ];
+
+    for (const a of appsList) {
+      insertApp.run(
+        a.slug, a.name, a.short_description, a.description, a.platform,
+        a.status, a.version, a.icon, a.image_url, a.features_json, a.sort_order
+      );
+    }
+    console.log('[DB] 7 VK Technology Apps seeded successfully.');
+  } catch (err) {
+    console.warn('[DB] Non-critical warning in seedApps:', err);
+  }
+}
+
+function seedInventoryMovements() {
+  try {
+    const existing = db.prepare('SELECT COUNT(*) as count FROM inventory_movements').get() as { count: number };
+    if (existing && existing.count > 0) return;
+
+    const products = db.prepare('SELECT id, stock_quantity FROM products LIMIT 10').all() as any[];
+    const insertMovement = db.prepare(`
+      INSERT INTO inventory_movements (
+        product_id, change_type, quantity_change, previous_quantity, new_quantity,
+        reason, reference_id, created_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    for (const p of products) {
+      insertMovement.run(
+        p.id,
+        'restock',
+        p.stock_quantity,
+        0,
+        p.stock_quantity,
+        'Initial warehouse inventory intake',
+        'PO-INIT-2026',
+        'S. J. V. Karthik'
+      );
+    }
+  } catch (err) {
+    console.warn('[DB] Non-critical warning in seedInventoryMovements:', err);
   }
 }

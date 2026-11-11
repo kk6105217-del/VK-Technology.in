@@ -276,7 +276,8 @@ exports.authRouter.put('/profile', auth_js_1.authenticateToken, (req, res) => {
         database_js_1.db.prepare(`
       UPDATE users SET full_name = ?, phone = ?, updated_at = datetime('now') WHERE id = ?
     `).run(full_name, phone, req.user.id);
-        res.json({ message: 'Profile updated successfully.' });
+        const updatedUser = database_js_1.db.prepare('SELECT id, email, full_name, phone, role FROM users WHERE id = ?').get(req.user.id);
+        res.json({ message: 'Profile updated successfully.', user: updatedUser });
     }
     catch (error) {
         res.status(500).json({ error: 'Failed to update profile.' });
@@ -420,7 +421,8 @@ exports.authRouter.post('/addresses', auth_js_1.authenticateToken, (req, res) =>
       INSERT INTO addresses (user_id, full_name, phone, address_line1, address_line2, landmark, city, state, postal_code, is_default)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(req.user.id, full_name, phone, address_line1, address_line2 || null, landmark || null, city, state, postal_code, is_default ? 1 : 0);
-        res.status(201).json({ message: 'Address saved successfully.', id: Number(result.lastInsertRowid) });
+        const insertedId = Number(result.lastInsertRowid);
+        res.status(201).json({ message: 'Address saved successfully.', id: insertedId, addressId: insertedId });
     }
     catch (error) {
         res.status(500).json({ error: 'Failed to save address.' });

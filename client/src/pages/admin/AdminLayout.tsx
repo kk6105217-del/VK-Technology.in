@@ -18,7 +18,9 @@ import {
   Menu,
   X,
   User,
-  QrCode
+  QrCode,
+  Wrench,
+  Smartphone
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 
@@ -81,15 +83,17 @@ export const AdminLayout: React.FC = () => {
 
   const navItems = [
     { name: 'Overview', path: '/admin/dashboard', icon: LayoutDashboard },
+    { name: 'Analytics & Reports', path: '/admin/analytics', icon: BarChart3 },
     { name: 'Products', path: '/admin/products', icon: Package },
     { name: 'Categories', path: '/admin/categories', icon: Layers },
+    { name: 'DIY Projects', path: '/admin/projects', icon: Wrench },
+    { name: 'Companion Apps', path: '/admin/apps', icon: Smartphone },
     { name: 'Inventory & Stock', path: '/admin/inventory', icon: Boxes },
     { name: 'Customer Orders', path: '/admin/orders', icon: ShoppingBag },
     { name: 'UPI Payments', path: '/admin/upi-payments', icon: QrCode },
     { name: 'Coupons & Discounts', path: '/admin/coupons', icon: Tag },
     { name: 'Homepage Banners', path: '/admin/banners', icon: ImageIcon },
     { name: 'Review Moderation', path: '/admin/reviews', icon: MessageSquare },
-    { name: 'Sales Reports & CSV', path: '/admin/reports', icon: BarChart3 },
     { name: 'Store & Shipping Settings', path: '/admin/settings', icon: Settings },
   ];
 
@@ -130,7 +134,9 @@ export const AdminLayout: React.FC = () => {
           <div className="flex items-center space-x-2 border-l border-gray-700 pl-4">
             <div className="text-right hidden sm:block">
               <span className="block font-bold text-gray-200">{user.full_name}</span>
-              <span className="text-[10px] text-amber-400 font-mono">{user.email}</span>
+              <span className="text-[10px] text-amber-400 font-mono">
+                {user.email} <span className="bg-amber-500/20 text-amber-300 px-1.5 py-0.2 rounded font-bold uppercase text-[9px] border border-amber-500/30">{user.role}</span>
+              </span>
             </div>
             <button
               onClick={() => {

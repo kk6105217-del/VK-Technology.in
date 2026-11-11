@@ -23,6 +23,9 @@ const settings_js_1 = require("./routes/settings.js");
 const upload_js_1 = require("./routes/upload.js");
 const contact_js_1 = require("./routes/contact.js");
 const upi_js_1 = require("./routes/upi.js");
+const projects_js_1 = require("./routes/projects.js");
+const apps_js_1 = require("./routes/apps.js");
+const analytics_js_1 = require("./routes/analytics.js");
 const events_js_1 = require("./services/events.js");
 const openapi_js_1 = require("./openapi.js");
 const app = (0, express_1.default)();
@@ -75,13 +78,26 @@ const routeBindings = [
     ['/upload', upload_js_1.uploadRouter],
     ['/contact', contact_js_1.contactRouter],
     ['/upi', upi_js_1.upiRouter],
+    ['/projects', projects_js_1.projectsRouter],
+    ['/apps', apps_js_1.appsRouter],
+    ['/analytics', analytics_js_1.analyticsRouter],
 ];
 routeBindings.forEach(([prefix, router]) => {
     app.use(`/api${prefix}`, router);
-    app.use(prefix, router);
+    // Route stripped prefix paths only for programmatic/API requests; let HTML navigation reach SPA fallback
+    app.use(prefix, (req, res, next) => {
+        const acceptsHtml = req.headers.accept && req.headers.accept.includes('text/html');
+        if (acceptsHtml && req.method === 'GET') {
+            return next();
+        }
+        return router(req, res, next);
+    });
 });
-// Explicit administration endpoints binding for global product synchronization
+// Explicit administration endpoints binding for global synchronization & modular RBAC
 app.use('/api/admin/products', products_js_1.productsRouter);
+app.use('/api/admin/projects', projects_js_1.projectsRouter);
+app.use('/api/admin/apps', apps_js_1.appsRouter);
+app.use('/api/admin/analytics', analytics_js_1.analyticsRouter);
 // Health check endpoint on both /api/health and /health
 const healthHandler = (_req, res) => {
     res.json({

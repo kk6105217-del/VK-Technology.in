@@ -18,9 +18,10 @@ exports.settingsRouter.get('/', (req, res) => {
     }
 });
 // Admin: Update store settings
-exports.settingsRouter.put('/admin', auth_js_1.authenticateToken, auth_js_1.requireAdmin, (req, res) => {
+const handleUpdateSettings = (req, res) => {
     try {
-        const settings = req.body;
+        const raw = req.body;
+        const settings = (raw && typeof raw === 'object' && raw.settings) ? raw.settings : raw;
         const updateStmt = database_js_1.db.prepare(`
       INSERT INTO website_settings (key, value, updated_at) 
       VALUES (?, ?, datetime('now'))
@@ -36,7 +37,9 @@ exports.settingsRouter.put('/admin', auth_js_1.authenticateToken, auth_js_1.requ
     catch (error) {
         res.status(500).json({ error: 'Failed to update settings.' });
     }
-});
+};
+exports.settingsRouter.put('/admin', auth_js_1.authenticateToken, auth_js_1.requireAdmin, handleUpdateSettings);
+exports.settingsRouter.put('/', auth_js_1.authenticateToken, auth_js_1.requireAdmin, handleUpdateSettings);
 // Admin: Dashboard Statistics
 exports.settingsRouter.get('/admin/stats', auth_js_1.authenticateToken, auth_js_1.requireAdmin, (req, res) => {
     try {

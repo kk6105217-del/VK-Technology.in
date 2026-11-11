@@ -452,7 +452,7 @@ exports.ordersRouter.get('/admin/all', auth_js_1.authenticateToken, auth_js_1.re
     }
 });
 // Admin: Update order status & tracking
-exports.ordersRouter.patch('/admin/:id/status', auth_js_1.authenticateToken, auth_js_1.requireAdmin, async (req, res) => {
+const handleOrderStatusUpdate = async (req, res) => {
     try {
         const { order_status, payment_status, tracking_number, notes } = req.body;
         const orderId = req.params.id;
@@ -486,7 +486,11 @@ exports.ordersRouter.patch('/admin/:id/status', auth_js_1.authenticateToken, aut
         console.error('Failed to update order status:', error);
         res.status(500).json({ error: error.message || 'Failed to update order status.' });
     }
-});
+};
+exports.ordersRouter.patch('/admin/:id/status', auth_js_1.authenticateToken, auth_js_1.requireAdmin, handleOrderStatusUpdate);
+exports.ordersRouter.patch('/:id/status', auth_js_1.authenticateToken, auth_js_1.requireAdmin, handleOrderStatusUpdate);
+exports.ordersRouter.put('/admin/:id/status', auth_js_1.authenticateToken, auth_js_1.requireAdmin, handleOrderStatusUpdate);
+exports.ordersRouter.put('/:id/status', auth_js_1.authenticateToken, auth_js_1.requireAdmin, handleOrderStatusUpdate);
 // Admin: Get notification delivery logs for an order
 exports.ordersRouter.get('/admin/:id/notifications', auth_js_1.authenticateToken, auth_js_1.requireAdmin, (req, res) => {
     try {

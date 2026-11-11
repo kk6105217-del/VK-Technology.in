@@ -12,9 +12,10 @@ export const config = {
   
   // Owner & Store Info
   storeName: 'VK Technology',
+  ownerName: 'S. J. V. Karthik',
   adminEmail: process.env.ADMIN_EMAIL || 'karthik.suroju@gmail.com',
   adminInitialPassword: process.env.ADMIN_INITIAL_PASSWORD || 'Admin@VK2026!',
-  ownerLocation: 'India',
+  ownerLocation: 'Pedamiram, West Godavari, Andhra Pradesh, India',
   currency: 'INR',
   currencySymbol: '₹',
   

@@ -40,8 +40,13 @@ export const Footer: React.FC = () => {
                 </Link>
               </li>
               <li>
-                <Link to="/category/student-diy-project-kits" className="hover:underline hover:text-white">
-                  Student Campus Ambassador
+                <Link to="/projects" className="hover:underline hover:text-white">
+                  DIY Electronics Projects
+                </Link>
+              </li>
+              <li>
+                <Link to="/apps" className="hover:underline hover:text-white">
+                  Companion Apps & Tools
                 </Link>
               </li>
               <li>
@@ -195,7 +200,7 @@ export const Footer: React.FC = () => {
             </div>
             <div className="flex items-center space-x-1.5 border border-gray-600 rounded px-3 py-1 text-gray-400">
               <MapPin size={12} className="text-amber-400" />
-              <span>India</span>
+              <span>Pedamiram, West Godavari, Andhra Pradesh, India</span>
             </div>
           </div>
         </div>
@@ -224,7 +229,7 @@ export const Footer: React.FC = () => {
           </div>
 
           <p className="text-gray-400 leading-relaxed max-w-2xl mx-auto">
-            Authorized Owner: <a href="mailto:karthik.suroju@gmail.com" className="text-amber-400 hover:underline">karthik.suroju@gmail.com</a> • WhatsApp: +91 8555997052
+            Authorized Owner: S. J. V. Karthik (<a href="mailto:karthik.suroju@gmail.com" className="text-amber-400 hover:underline">karthik.suroju@gmail.com</a>) • WhatsApp: +91 8555997052 • Location: Pedamiram, West Godavari, Andhra Pradesh, India
           </p>
 
           <p className="text-gray-400">

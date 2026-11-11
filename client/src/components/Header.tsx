@@ -135,7 +135,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenMobileMenu }) => {
             Special Offer
           </span>
           <span className="truncate">
-            Free Express Delivery on orders above ₹999 • All India Fast Shipping from Andhra Pradesh
+            FREE delivery on orders over ₹999 • Estimated Delivery: 1-2 Weeks
           </span>
         </div>
         <div className="hidden md:flex items-center space-x-4 text-gray-400">

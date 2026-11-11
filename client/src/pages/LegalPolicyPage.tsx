@@ -17,26 +17,22 @@ export const LegalPolicyPage: React.FC = () => {
 
           <h3 className="text-sm font-bold text-gray-900 mt-4">1. Dispatch Hub & Order Processing</h3>
           <p>
-            All products are stocked, bench-tested, and dispatched directly from our dedicated warehouse facility in India with real-time courier tracking.
+            All products are stocked, bench-tested, and dispatched directly from our dedicated warehouse facility in Pedamiram, West Godavari, Andhra Pradesh, India with real-time courier tracking.
           </p>
           <ul className="list-disc pl-5 space-y-1">
-            <li>Orders placed before 3:00 PM IST on working days (Monday through Saturday) are typically processed and dispatched the same day.</li>
+            <li>Orders placed before 3:00 PM IST on working days (Monday through Saturday) are typically processed and dispatched promptly.</li>
             <li>Orders placed on Sundays or gazetted public holidays are dispatched on the next business day.</li>
           </ul>
 
           <h3 className="text-sm font-bold text-gray-900 mt-4">2. Shipping Charges & Free Delivery</h3>
           <ul className="list-disc pl-5 space-y-1">
-            <li><strong>FREE Delivery:</strong> Available across India on all prepaid and eligible orders with a cart subtotal of <strong>₹999 or above</strong>.</li>
+            <li><strong>FREE Delivery:</strong> Available across India on all orders with a cart subtotal of <strong>₹999 or above</strong>.</li>
             <li><strong>Standard Shipping Fee:</strong> A nominal flat charge of <strong>₹60</strong> applies to orders below ₹999.</li>
-            <li><strong>Cash on Delivery (COD) Convenience Fee:</strong> An additional flat fee of <strong>₹40</strong> is applied for Cash on Delivery orders to cover courier cash collection and verification overheads.</li>
           </ul>
 
           <h3 className="text-sm font-bold text-gray-900 mt-4">3. Estimated Delivery Timelines</h3>
           <ul className="list-disc pl-5 space-y-1">
-            <li><strong>Andhra Pradesh & Telangana:</strong> 1 - 2 business days.</li>
-            <li><strong>South India (Karnataka, Tamil Nadu, Kerala):</strong> 2 - 3 business days.</li>
-            <li><strong>Rest of India (Metro & Non-Metro Cities):</strong> 3 - 5 business days.</li>
-            <li><strong>Remote Regions & North East:</strong> 5 - 7 business days via Express Air Cargo / Speed Post.</li>
+            <li><strong>FREE delivery on orders over ₹999 • Estimated Delivery: 1-2 Weeks</strong> across all Indian States and Union Territories.</li>
           </ul>
 
           <h3 className="text-sm font-bold text-gray-900 mt-4">4. Tracking Your Shipment</h3>

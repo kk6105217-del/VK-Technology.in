@@ -607,6 +607,144 @@ exports.productsRouter.patch('/:id/status', auth_js_1.authenticateToken, auth_js
         res.status(500).json({ error: 'Failed to update status.' });
     }
 });
+// Admin: Bulk Delete Products or Delete All
+const bulkDeleteProductsHandler = (req, res) => {
+    try {
+        let { ids, all } = req.body || {};
+        let targetIds = [];
+        if (all === true) {
+            const allRows = database_js_1.db.prepare('SELECT id FROM products').all();
+            targetIds = allRows.map(r => r.id);
+        }
+        else if (Array.isArray(ids)) {
+            targetIds = ids.map(id => Number(id)).filter(id => !isNaN(id) && id > 0);
+        }
+        if (targetIds.length === 0) {
+            res.status(400).json({ error: 'No product IDs provided for deletion.' });
+            return;
+        }
+        let deletedCount = 0;
+        let archivedCount = 0;
+        const deletedIds = [];
+        const archivedIds = [];
+        database_js_1.db.exec('BEGIN TRANSACTION');
+        try {
+            for (const prodId of targetIds) {
+                // Safety rule: Never delete product if existing orders reference it
+                const orderRef = database_js_1.db.prepare('SELECT COUNT(*) as count FROM order_items WHERE product_id = ?').get(prodId);
+                if (orderRef && orderRef.count > 0) {
+                    // Soft-delete: unpublish product to preserve customer order history
+                    database_js_1.db.prepare(`
+            UPDATE products 
+            SET is_active = 0, version = version + 1, updated_at = datetime('now') 
+            WHERE id = ?
+          `).run(prodId);
+                    archivedCount++;
+                    archivedIds.push(prodId);
+                }
+                else {
+                    // Hard delete cascade
+                    database_js_1.db.prepare('DELETE FROM product_images WHERE product_id = ?').run(prodId);
+                    database_js_1.db.prepare('DELETE FROM cart_items WHERE product_id = ?').run(prodId);
+                    database_js_1.db.prepare('DELETE FROM wishlists WHERE product_id = ?').run(prodId);
+                    database_js_1.db.prepare('DELETE FROM reviews WHERE product_id = ?').run(prodId);
+                    database_js_1.db.prepare('DELETE FROM products WHERE id = ?').run(prodId);
+                    deletedCount++;
+                    deletedIds.push(prodId);
+                }
+            }
+            (0, database_js_1.recordAuditLog)(req.user?.email || 'admin@vktechnology.shop', 'BULK_DELETE_PRODUCTS', 'Products', targetIds.join(','), { deletedCount, archivedCount, deletedIds, archivedIds });
+            database_js_1.db.exec('COMMIT');
+        }
+        catch (txErr) {
+            try {
+                database_js_1.db.exec('ROLLBACK');
+            }
+            catch { }
+            throw txErr;
+        }
+        // Broadcast live event for synchronization across all clients
+        try {
+            events_js_1.eventBroadcaster.broadcast('PRODUCT_DELETED', {
+                count: targetIds.length,
+                deletedIds,
+                archivedIds
+            });
+        }
+        catch { }
+        res.json({
+            message: `Processed ${targetIds.length} products: ${deletedCount} deleted permanently, ${archivedCount} safely archived (preserved in existing customer orders).`,
+            deletedCount,
+            archivedCount,
+            totalProcessed: targetIds.length,
+            timestamp: new Date().toISOString()
+        });
+    }
+    catch (error) {
+        console.error('Bulk delete products error:', error);
+        res.status(500).json({ error: error.message || 'Failed to bulk delete products.' });
+    }
+};
+exports.productsRouter.post('/admin/bulk-delete', auth_js_1.authenticateToken, auth_js_1.requireAdmin, bulkDeleteProductsHandler);
+exports.productsRouter.post('/bulk-delete', auth_js_1.authenticateToken, auth_js_1.requireAdmin, bulkDeleteProductsHandler);
+exports.productsRouter.delete('/admin/all', auth_js_1.authenticateToken, auth_js_1.requireAdmin, (req, res) => {
+    req.body = { all: true };
+    bulkDeleteProductsHandler(req, res);
+});
+exports.productsRouter.delete('/all', auth_js_1.authenticateToken, auth_js_1.requireAdmin, (req, res) => {
+    req.body = { all: true };
+    bulkDeleteProductsHandler(req, res);
+});
+// Admin: Bulk Toggle Status (Publish / Unpublish)
+const bulkStatusProductsHandler = (req, res) => {
+    try {
+        const { ids, is_active } = req.body || {};
+        if (!Array.isArray(ids) || ids.length === 0) {
+            res.status(400).json({ error: 'No product IDs provided.' });
+            return;
+        }
+        const targetIds = ids.map(id => Number(id)).filter(id => !isNaN(id) && id > 0);
+        const newStatus = is_active ? 1 : 0;
+        database_js_1.db.exec('BEGIN TRANSACTION');
+        try {
+            const stmt = database_js_1.db.prepare(`
+        UPDATE products 
+        SET is_active = ?, version = version + 1, updated_at = datetime('now') 
+        WHERE id = ?
+      `);
+            for (const id of targetIds) {
+                stmt.run(newStatus, id);
+            }
+            (0, database_js_1.recordAuditLog)(req.user?.email || 'admin@vktechnology.shop', 'BULK_UPDATE_PRODUCT_STATUS', 'Products', targetIds.join(','), { is_active: newStatus, count: targetIds.length });
+            database_js_1.db.exec('COMMIT');
+        }
+        catch (txErr) {
+            try {
+                database_js_1.db.exec('ROLLBACK');
+            }
+            catch { }
+            throw txErr;
+        }
+        try {
+            events_js_1.eventBroadcaster.broadcast('PRODUCT_UPDATED', {
+                ids: targetIds,
+                is_active: !!is_active
+            });
+        }
+        catch { }
+        res.json({
+            message: `Successfully ${is_active ? 'published' : 'unpublished'} ${targetIds.length} products.`,
+            count: targetIds.length,
+            timestamp: new Date().toISOString()
+        });
+    }
+    catch (error) {
+        console.error('Bulk status update error:', error);
+        res.status(500).json({ error: error.message || 'Failed to update product statuses.' });
+    }
+};
+exports.productsRouter.post('/admin/bulk-status', auth_js_1.authenticateToken, auth_js_1.requireAdmin, bulkStatusProductsHandler);
+exports.productsRouter.post('/bulk-status', auth_js_1.authenticateToken, auth_js_1.requireAdmin, bulkStatusProductsHandler);
 // Admin: Delete product (with foreign key protection for orders)
 exports.productsRouter.delete('/:id', auth_js_1.authenticateToken, auth_js_1.requireAdmin, (req, res) => {
     try {

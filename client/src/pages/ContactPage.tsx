@@ -23,7 +23,7 @@ const FAQS = [
   },
   {
     q: 'What payment methods do you support?',
-    a: 'We accept Direct UPI QR Code payment (PhonePe, Google Pay, Paytm, BHIM), Online Gateway (Cards, Net Banking) and Cash on Delivery (COD) for eligible pincodes.'
+    a: 'We accept Direct UPI QR Code payment (PhonePe, Google Pay, Paytm, BHIM), Online Gateway (Credit/Debit Cards, Net Banking via Razorpay), and Direct Bank Transfers. FREE delivery on orders over ₹999 • Estimated Delivery: 1-2 Weeks.'
   },
   {
     q: 'Can I request bulk orders or custom component packages for college labs?',

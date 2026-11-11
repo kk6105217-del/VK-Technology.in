@@ -76,7 +76,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     localStorage.removeItem('vk_customer_user');
   };
 
-  const isAdmin = !!(user && user.role === 'admin');
+  const ADMIN_ROLES = ['admin', 'SUPER_ADMIN', 'PRODUCT_MANAGER', 'ORDER_MANAGER', 'INVENTORY_MANAGER'];
+  const isAdmin = !!(user && ADMIN_ROLES.includes(user.role));
 
   return (
     <AuthContext.Provider
