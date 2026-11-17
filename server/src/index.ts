@@ -8,7 +8,7 @@ import { config } from './config.js';
 import { initDatabase } from './database.js';
 import { authRouter } from './routes/auth.js';
 import { categoriesRouter } from './routes/categories.js';
-import { productsRouter } from './routes/products.js';
+import { productsRouter, syncFromMongoMaster } from './routes/products.js';
 import { ordersRouter } from './routes/orders.js';
 import { cartRouter } from './routes/cart.js';
 import { wishlistRouter } from './routes/wishlist.js';
@@ -53,11 +53,12 @@ connectToDatabase()
   .then(async (m) => {
     if (m && isMongoConnected()) {
       console.log('[MongoDB Atlas] Central Database connection verified.');
-      // Auto-run idempotent migration to ensure all products & admins exist in Mongo
+      // Auto-run idempotent migration & sync down from MongoDB Atlas master
       try {
         await runMigrationToMongo();
+        await syncFromMongoMaster();
       } catch (migErr: any) {
-        console.warn('[MongoDB Atlas] Auto-migration warning:', migErr.message);
+        console.warn('[MongoDB Atlas] Auto-migration/sync warning:', migErr.message);
       }
     }
   })

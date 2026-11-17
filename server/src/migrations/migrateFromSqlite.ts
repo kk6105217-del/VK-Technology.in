@@ -64,87 +64,92 @@ export async function runMigrationToMongo(): Promise<{
       errors.push(`Categories migration warning: ${e.message}`);
     }
 
-    // 2. Migrate Products & Inventory
+    // 2. Migrate Products & Inventory (ONLY when MongoDB Atlas has zero products)
     try {
-      const rows: any[] = db.prepare('SELECT * FROM products').all() || [];
-      for (const row of rows) {
-        const existing = await Product.findOne({ sku: row.sku });
-        if (!existing) {
-          let specs: any = {};
-          try {
-            if (row.specifications) specs = JSON.parse(row.specifications);
-          } catch {}
+      const mongoProductCount = await Product.countDocuments();
+      if (mongoProductCount > 0) {
+        console.log(`[Migration] MongoDB Atlas already has ${mongoProductCount} products. Skipping SQLite initial seed migration to preserve deletions and archives.`);
+      } else {
+        const rows: any[] = db.prepare('SELECT * FROM products').all() || [];
+        for (const row of rows) {
+          const existing = await Product.findOne({ sku: row.sku });
+          if (!existing) {
+            let specs: any = {};
+            try {
+              if (row.specifications) specs = JSON.parse(row.specifications);
+            } catch {}
 
-          // Fetch product images
-          let images: any[] = [];
-          try {
-            const imgRows: any[] = db.prepare('SELECT * FROM product_images WHERE product_id = ?').all(row.id) || [];
-            images = imgRows.map((img: any) => ({
-              url: img.image_url,
-              alt_text: img.alt_text || row.name,
-              sort_order: img.sort_order || 0,
-              is_primary: Boolean(img.is_primary),
-            }));
-          } catch {}
+            // Fetch product images
+            let images: any[] = [];
+            try {
+              const imgRows: any[] = db.prepare('SELECT * FROM product_images WHERE product_id = ?').all(row.id) || [];
+              images = imgRows.map((img: any) => ({
+                url: img.image_url,
+                alt_text: img.alt_text || row.name,
+                sort_order: img.sort_order || 0,
+                is_primary: Boolean(img.is_primary),
+              }));
+            } catch {}
 
-          if (images.length === 0 && row.image_url) {
-            images.push({
-              url: row.image_url,
-              alt_text: row.name,
-              sort_order: 0,
-              is_primary: true,
-            });
-          }
+            if (images.length === 0 && row.image_url) {
+              images.push({
+                url: row.image_url,
+                alt_text: row.name,
+                sort_order: 0,
+                is_primary: true,
+              });
+            }
 
-          const newProd = await Product.create({
-            id: row.id,
-            name: row.name,
-            slug: row.slug,
-            sku: row.sku,
-            category_id: row.category_id,
-            category_slug: row.category_slug || 'arduino-boards-and-kits',
-            brand: row.brand || 'VK Technology',
-            description: row.description,
-            short_description: row.short_description,
-            image_url: row.image_url || images[0]?.url,
-            images,
-            price: row.price,
-            discounted_price: row.discounted_price,
-            stock_quantity: row.stock_quantity ?? 10,
-            min_stock_alert: 5,
-            specifications: specs,
-            compatibility: row.compatibility,
-            is_featured: Boolean(row.is_featured),
-            is_active: Boolean(row.is_active !== undefined ? row.is_active : 1),
-            deleted_at: row.deleted_at ? new Date(row.deleted_at) : null,
-          });
-          counts.products++;
-
-          // Initialize Inventory record
-          const invExists = await Inventory.findOne({ product_id: row.id });
-          if (!invExists) {
-            await Inventory.create({
-              product_id: row.id,
-              product_ref: newProd._id,
+            const newProd = await Product.create({
+              id: row.id,
+              name: row.name,
+              slug: row.slug,
               sku: row.sku,
-              available_quantity: row.stock_quantity ?? 10,
-              reserved_quantity: 0,
-              sold_quantity: 0,
+              category_id: row.category_id,
+              category_slug: row.category_slug || 'arduino-boards-and-kits',
+              brand: row.brand || 'VK Technology',
+              description: row.description,
+              short_description: row.short_description,
+              image_url: row.image_url || images[0]?.url,
+              images,
+              price: row.price,
+              discounted_price: row.discounted_price,
+              stock_quantity: row.stock_quantity ?? 10,
               min_stock_alert: 5,
-              movements: [
-                {
-                  movement_type: 'initial',
-                  quantity_changed: row.stock_quantity ?? 10,
-                  previous_stock: 0,
-                  new_stock: row.stock_quantity ?? 10,
-                  reference_type: 'INITIAL_IMPORT',
-                  notes: 'Initial inventory baseline imported into MongoDB Atlas',
-                  performed_by: 'Migration Script',
-                  timestamp: new Date(),
-                },
-              ],
+              specifications: specs,
+              compatibility: row.compatibility,
+              is_featured: Boolean(row.is_featured),
+              is_active: Boolean(row.is_active !== undefined ? row.is_active : 1),
+              deleted_at: row.deleted_at ? new Date(row.deleted_at) : null,
             });
-            counts.inventory++;
+            counts.products++;
+
+            // Initialize Inventory record
+            const invExists = await Inventory.findOne({ product_id: row.id });
+            if (!invExists) {
+              await Inventory.create({
+                product_id: row.id,
+                product_ref: newProd._id,
+                sku: row.sku,
+                available_quantity: row.stock_quantity ?? 10,
+                reserved_quantity: 0,
+                sold_quantity: 0,
+                min_stock_alert: 5,
+                movements: [
+                  {
+                    movement_type: 'initial',
+                    quantity_changed: row.stock_quantity ?? 10,
+                    previous_stock: 0,
+                    new_stock: row.stock_quantity ?? 10,
+                    reference_type: 'INITIAL_IMPORT',
+                    notes: 'Initial inventory baseline imported into MongoDB Atlas',
+                    performed_by: 'Migration Script',
+                    timestamp: new Date(),
+                  },
+                ],
+              });
+              counts.inventory++;
+            }
           }
         }
       }

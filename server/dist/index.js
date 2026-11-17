@@ -54,12 +54,13 @@ catch (err) {
     .then(async (m) => {
     if (m && (0, database_js_3.isMongoConnected)()) {
         console.log('[MongoDB Atlas] Central Database connection verified.');
-        // Auto-run idempotent migration to ensure all products & admins exist in Mongo
+        // Auto-run idempotent migration & sync down from MongoDB Atlas master
         try {
             await (0, migrateFromSqlite_js_1.runMigrationToMongo)();
+            await (0, products_js_1.syncFromMongoMaster)();
         }
         catch (migErr) {
-            console.warn('[MongoDB Atlas] Auto-migration warning:', migErr.message);
+            console.warn('[MongoDB Atlas] Auto-migration/sync warning:', migErr.message);
         }
     }
 })

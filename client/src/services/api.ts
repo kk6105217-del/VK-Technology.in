@@ -588,22 +588,33 @@ export const api = {
         if (params.status) query.append('status', params.status);
         const res = await request<{ products: Product[] }>(`/products/admin/all?${query.toString()}`);
         if (Array.isArray(res?.products)) {
+          try {
+            if (!params.search && !params.category && (!params.status || params.status === 'all')) {
+              localStorage.setItem('vk_admin_products_cache', JSON.stringify(res.products));
+            }
+          } catch {}
           return res;
         }
-        return { products: FALLBACK_PRODUCTS };
+        return { products: [] };
       } catch (err) {
-        console.warn('API /products/admin/all unavailable, using fallback:', err);
-        let all = [...FALLBACK_PRODUCTS];
-        if (params.search) {
-          const s = params.search.toLowerCase();
-          all = all.filter(p => p.name.toLowerCase().includes(s) || p.sku.toLowerCase().includes(s));
-        }
-        if (params.category) {
-          all = all.filter(p => p.category_id === Number(params.category));
-        }
-        if (params.status === 'active') all = all.filter(p => p.is_active);
-        if (params.status === 'inactive') all = all.filter(p => !p.is_active);
-        return { products: all };
+        console.warn('API /products/admin/all fetch error, checking cache:', err);
+        try {
+          const cached = localStorage.getItem('vk_admin_products_cache');
+          if (cached) {
+            let all: Product[] = JSON.parse(cached);
+            if (params.search) {
+              const s = params.search.toLowerCase();
+              all = all.filter(p => p.name.toLowerCase().includes(s) || p.sku.toLowerCase().includes(s));
+            }
+            if (params.category) {
+              all = all.filter(p => p.category_id === Number(params.category));
+            }
+            if (params.status === 'active') all = all.filter(p => p.is_active);
+            if (params.status === 'inactive') all = all.filter(p => !p.is_active);
+            return { products: all };
+          }
+        } catch {}
+        return { products: [] };
       }
     },
     getBySlug: async (slug: string) => {

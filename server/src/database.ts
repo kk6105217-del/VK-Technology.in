@@ -594,7 +594,7 @@ function seedInitialData() {
       name: 'Motors and Motor Drivers',
       description: 'Stepper motors, servo motors, DC gear motors, L298N, TB6600, and PCA9685 driver boards.',
       icon: 'Zap',
-      image_url: 'https://images.unsplash.com/photo-1581092335397-9583fe92d232?auto=format&fit=crop&w=600&q=80',
+      image_url: 'https://images.unsplash.com/photo-1553406830-ef2513450d76?auto=format&fit=crop&w=600&q=80',
       sort_order: 8
     },
     {
@@ -712,10 +712,13 @@ function seedInitialData() {
     insertCoupon.run('FREESHIP', 'Free shipping on orders above ₹499', 'fixed', 60, 499, 60);
   }
 
-  // 6. Ensure Products exist
+  // 6. Ensure Products exist (only on fresh first-time seed in standalone SQLite mode, never in MongoDB Atlas mode or if catalog already seeded)
+  const isMongoConfigured = Boolean(process.env.MONGODB_URI || process.env.VERCEL);
   const existingProducts = db.prepare('SELECT COUNT(*) as count FROM products').get() as { count: number };
-  if (existingProducts.count === 0) {
+  const catalogSeeded = db.prepare("SELECT value FROM website_settings WHERE key = 'catalog_seeded'").get() as any;
+  if (!isMongoConfigured && existingProducts.count === 0 && (!catalogSeeded || catalogSeeded.value !== 'true')) {
     seedProducts();
+    db.prepare("INSERT OR REPLACE INTO website_settings (key, value) VALUES ('catalog_seeded', 'true')").run();
   }
 
   // 7. Ensure Projects exist (13 DIY Projects)
@@ -1265,7 +1268,7 @@ export const CANONICAL_PRODUCTS_DATA = [
       estimated_dispatch_days: 1,
       is_featured: 0,
       images: [
-        'https://images.unsplash.com/photo-1581092335397-9583fe92d232?auto=format&fit=crop&w=800&q=80'
+        'https://images.unsplash.com/photo-1553406830-ef2513450d76?auto=format&fit=crop&w=800&q=80'
       ]
     },
     {
@@ -1298,7 +1301,7 @@ export const CANONICAL_PRODUCTS_DATA = [
       estimated_dispatch_days: 1,
       is_featured: 0,
       images: [
-        'https://images.unsplash.com/photo-1581092335397-9583fe92d232?auto=format&fit=crop&w=800&q=80'
+        'https://images.unsplash.com/photo-1563770660941-20978e870e26?auto=format&fit=crop&w=800&q=80'
       ]
     },
 
@@ -1902,7 +1905,7 @@ function seedProjects() {
         estimated_time: '2-3 Hours',
         short_description: 'Indoor environmental safety monitor detecting harmful airborne gases, smoke, and CO2 with audible hazard alarm.',
         description: 'Continuous indoor pollution detector measuring particulate gas concentrations including ammonia, sulfide, benzene vapors, smoke, and CO2. When gas concentration crosses user safety thresholds, an active piezoceramic buzzer alerts occupants while the 16x2 I2C LCD displays parts-per-million (PPM) readings.',
-        image_url: 'https://images.unsplash.com/photo-1581092335397-9583fe92d232?auto=format&fit=crop&w=800&q=80',
+        image_url: 'https://images.unsplash.com/photo-1553406830-ef2513450d76?auto=format&fit=crop&w=800&q=80',
         circuit_diagram_url: '/circuit-diagrams/air-quality.png',
         code_url: 'https://github.com/vk-technology/air-quality-mq135',
         youtube_url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',

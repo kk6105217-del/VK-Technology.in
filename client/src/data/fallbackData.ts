@@ -99,7 +99,7 @@ export const FALLBACK_CATEGORIES: Category[] = [
     name: 'Motors and Motor Drivers',
     description: 'Stepper motors, servo motors, DC gear motors, L298N, TB6600, and PCA9685 driver boards.',
     icon: 'Zap',
-    image_url: 'https://images.unsplash.com/photo-1581092335397-9583fe92d232?auto=format&fit=crop&w=600&q=80',
+    image_url: 'https://images.unsplash.com/photo-1553406830-ef2513450d76?auto=format&fit=crop&w=600&q=80',
     sort_order: 8,
     is_active: 1
   },

@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.productsRouter = void 0;
+exports.syncFromMongoMaster = syncFromMongoMaster;
 exports.handleAdminProductsList = handleAdminProductsList;
 const express_1 = require("express");
 const database_js_1 = require("../database.js");
@@ -155,11 +156,154 @@ exports.productsRouter.get('/sync/status', (req, res) => {
         totalProducts: totalRow?.count || 0
     });
 });
+// Sync all products from MongoDB Atlas master into local SQLite database
+async function syncFromMongoMaster() {
+    if (!(0, database_js_2.isMongoConnected)())
+        return;
+    try {
+        const mongoProducts = await Product_js_1.Product.find({}).lean();
+        if (!mongoProducts || mongoProducts.length === 0)
+            return;
+        // 1. Delete SQLite products that are not present in Mongo
+        const mongoIds = new Set(mongoProducts.map((p) => p.id));
+        const sqliteProducts = database_js_1.db.prepare('SELECT id FROM products').all();
+        const delImg = database_js_1.db.prepare('DELETE FROM product_images WHERE product_id = ?');
+        const delProd = database_js_1.db.prepare('DELETE FROM products WHERE id = ?');
+        for (const sp of sqliteProducts) {
+            if (!mongoIds.has(sp.id)) {
+                delImg.run(sp.id);
+                delProd.run(sp.id);
+            }
+        }
+        // 2. Upsert each Mongo product into SQLite
+        const upsertStmt = database_js_1.db.prepare(`
+      INSERT INTO products (
+        id, slug, name, sku, category_id, subcategory, brand, description, short_description,
+        regular_price, discounted_price, stock_quantity, min_stock_alert, specifications_json,
+        features_json, package_contents_json, is_active, is_featured, deleted_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        slug = excluded.slug,
+        name = excluded.name,
+        sku = excluded.sku,
+        category_id = excluded.category_id,
+        subcategory = excluded.subcategory,
+        brand = excluded.brand,
+        description = excluded.description,
+        short_description = excluded.short_description,
+        regular_price = excluded.regular_price,
+        discounted_price = excluded.discounted_price,
+        stock_quantity = excluded.stock_quantity,
+        min_stock_alert = excluded.min_stock_alert,
+        specifications_json = excluded.specifications_json,
+        features_json = excluded.features_json,
+        package_contents_json = excluded.package_contents_json,
+        is_active = excluded.is_active,
+        is_featured = excluded.is_featured,
+        deleted_at = excluded.deleted_at
+    `);
+        const insertImg = database_js_1.db.prepare('INSERT INTO product_images (product_id, image_url, sort_order, is_primary) VALUES (?, ?, ?, ?)');
+        for (const p of mongoProducts) {
+            upsertStmt.run(p.id, p.slug, p.name, p.sku, p.category_id || 1, p.subcategory || '', p.brand || 'VK Technology', p.description || '', p.short_description || '', p.price || 0, p.discounted_price || p.price || 0, p.stock_quantity || 0, p.min_stock_alert || 5, JSON.stringify(p.specifications || {}), JSON.stringify(p.features || []), JSON.stringify(p.package_contents || []), p.is_active ? 1 : 0, p.is_featured ? 1 : 0, p.deleted_at ? new Date(p.deleted_at).toISOString() : null);
+            delImg.run(p.id);
+            const images = Array.isArray(p.images) ? p.images : [];
+            if (images.length > 0) {
+                images.forEach((img, idx) => {
+                    const url = typeof img === 'string' ? img : img.url;
+                    if (url)
+                        insertImg.run(p.id, url, idx, idx === 0 ? 1 : 0);
+                });
+            }
+            else if (p.image_url) {
+                insertImg.run(p.id, p.image_url, 0, 1);
+            }
+        }
+        console.log(`[MongoSyncMaster] Successfully synchronized ${mongoProducts.length} products from MongoDB master into local cache.`);
+    }
+    catch (err) {
+        console.warn('[MongoSyncMaster] Sync error:', err.message);
+    }
+}
 // Handler for administrative product listing (supports /api/admin/products and /api/products/admin/all)
-function handleAdminProductsList(req, res) {
+async function handleAdminProductsList(req, res) {
     try {
         (0, cache_js_1.setPrivateCacheControl)(res);
         const { search, category, status } = req.query;
+        if ((0, database_js_2.isMongoConnected)()) {
+            const mongoFilter = {};
+            if (status === 'archived' || status === 'recycle_bin') {
+                mongoFilter.deleted_at = { $ne: null };
+            }
+            else {
+                mongoFilter.deleted_at = null;
+                if (status === 'active')
+                    mongoFilter.is_active = true;
+                if (status === 'inactive')
+                    mongoFilter.is_active = false;
+                if (status === 'low_stock')
+                    mongoFilter.stock_quantity = { $gt: 0, $lte: 5 };
+                if (status === 'out_of_stock')
+                    mongoFilter.stock_quantity = 0;
+            }
+            if (category) {
+                if (!isNaN(Number(category))) {
+                    mongoFilter.category_id = Number(category);
+                }
+                else {
+                    mongoFilter.category_slug = String(category);
+                }
+            }
+            if (search && typeof search === 'string' && search.trim()) {
+                const regex = new RegExp(search.trim(), 'i');
+                mongoFilter.$or = [
+                    { name: regex },
+                    { sku: regex }
+                ];
+            }
+            const mongoProducts = await Product_js_1.Product.find(mongoFilter).sort({ id: -1 }).lean();
+            const products = mongoProducts.map((p) => {
+                let primaryImg = p.image_url;
+                let imgList = [];
+                if (Array.isArray(p.images) && p.images.length > 0) {
+                    imgList = p.images.map((img) => typeof img === 'string' ? img : img.url).filter(Boolean);
+                    if (!primaryImg && imgList.length > 0)
+                        primaryImg = imgList[0];
+                }
+                if (primaryImg && !imgList.includes(primaryImg)) {
+                    imgList.unshift(primaryImg);
+                }
+                if (!primaryImg) {
+                    primaryImg = 'https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=100&q=80';
+                }
+                return {
+                    id: p.id,
+                    name: p.name,
+                    slug: p.slug,
+                    sku: p.sku,
+                    category_id: p.category_id,
+                    category_slug: p.category_slug,
+                    category_name: p.category_slug ? p.category_slug.replace(/-/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase()) : 'General',
+                    brand: p.brand || 'VK Technology',
+                    description: p.description,
+                    short_description: p.short_description,
+                    regular_price: p.price,
+                    price: p.price,
+                    discounted_price: p.discounted_price,
+                    stock_quantity: p.stock_quantity,
+                    is_featured: p.is_featured ? 1 : 0,
+                    is_active: p.is_active ? 1 : 0,
+                    deleted_at: p.deleted_at,
+                    created_at: p.created_at,
+                    updated_at: p.updated_at,
+                    primary_image: primaryImg,
+                    images: imgList,
+                    specifications: p.specifications || {},
+                    features: p.features || [],
+                    package_contents: p.package_contents || []
+                };
+            });
+            return res.json({ products });
+        }
         let conditions = ['1=1'];
         let params = [];
         if (search && typeof search === 'string') {
@@ -238,7 +382,7 @@ function handleAdminProductsList(req, res) {
     }
 }
 // Public: Get all products with search, filters, pagination, and sorting
-exports.productsRouter.get('/', (req, res) => {
+exports.productsRouter.get('/', async (req, res) => {
     // If invoked via /api/admin/products route, delegate directly to admin handler
     if (req.baseUrl.includes('admin')) {
         return (0, auth_js_1.authenticateToken)(req, res, () => {
@@ -251,6 +395,120 @@ exports.productsRouter.get('/', (req, res) => {
         const syncStatus = events_js_1.eventBroadcaster.getCatalogSyncStatus();
         (0, cache_js_1.setDynamicCacheControl)(res, syncStatus.catalogVersion, syncStatus.lastUpdated);
         const { q, category, brand, min_price, max_price, in_stock, rating, featured, sort, page = 1, limit = 24 } = req.query;
+        if ((0, database_js_2.isMongoConnected)()) {
+            const mongoFilter = { deleted_at: null, is_active: true };
+            if (q && typeof q === 'string' && q.trim()) {
+                const regex = new RegExp(q.trim(), 'i');
+                mongoFilter.$or = [
+                    { name: regex },
+                    { sku: regex },
+                    { short_description: regex },
+                    { description: regex },
+                    { brand: regex }
+                ];
+            }
+            if (category && typeof category === 'string') {
+                if (!isNaN(Number(category))) {
+                    mongoFilter.category_id = Number(category);
+                }
+                else {
+                    mongoFilter.category_slug = category;
+                }
+            }
+            if (brand && typeof brand === 'string') {
+                mongoFilter.brand = brand;
+            }
+            if (min_price || max_price) {
+                mongoFilter.price = {};
+                if (min_price)
+                    mongoFilter.price.$gte = parseFloat(min_price);
+                if (max_price)
+                    mongoFilter.price.$lte = parseFloat(max_price);
+            }
+            if (in_stock === 'true' || in_stock === '1') {
+                mongoFilter.stock_quantity = { $gt: 0 };
+            }
+            if (rating) {
+                mongoFilter.average_rating = { $gte: parseFloat(rating) };
+            }
+            if (featured === 'true' || featured === '1') {
+                mongoFilter.is_featured = true;
+            }
+            let sortObj = { is_featured: -1, id: -1 };
+            switch (sort) {
+                case 'price-asc':
+                    sortObj = { price: 1 };
+                    break;
+                case 'price-desc':
+                    sortObj = { price: -1 };
+                    break;
+                case 'newest':
+                    sortObj = { created_at: -1 };
+                    break;
+                case 'bestselling':
+                    sortObj = { ratings_count: -1, id: -1 };
+                    break;
+                case 'rating':
+                    sortObj = { average_rating: -1 };
+                    break;
+            }
+            const total = await Product_js_1.Product.countDocuments(mongoFilter);
+            const offset = (Number(page) - 1) * Number(limit);
+            const mongoProducts = await Product_js_1.Product.find(mongoFilter)
+                .sort(sortObj)
+                .skip(offset)
+                .limit(Number(limit))
+                .lean();
+            const products = mongoProducts.map((p) => {
+                let primaryImg = p.image_url;
+                let imgList = [];
+                if (Array.isArray(p.images) && p.images.length > 0) {
+                    imgList = p.images.map((img) => typeof img === 'string' ? img : img.url).filter(Boolean);
+                    if (!primaryImg && imgList.length > 0)
+                        primaryImg = imgList[0];
+                }
+                if (primaryImg && !imgList.includes(primaryImg)) {
+                    imgList.unshift(primaryImg);
+                }
+                if (!primaryImg) {
+                    primaryImg = 'https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=600&q=80';
+                }
+                return {
+                    id: p.id,
+                    name: p.name,
+                    slug: p.slug,
+                    sku: p.sku,
+                    category_id: p.category_id,
+                    category_slug: p.category_slug,
+                    category_name: p.category_slug ? p.category_slug.replace(/-/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase()) : 'General',
+                    brand: p.brand || 'VK Technology',
+                    description: p.description,
+                    short_description: p.short_description,
+                    regular_price: p.price,
+                    price: p.price,
+                    discounted_price: p.discounted_price,
+                    stock_quantity: p.stock_quantity,
+                    rating_avg: p.average_rating || 5.0,
+                    rating_count: p.ratings_count || 0,
+                    is_featured: p.is_featured ? 1 : 0,
+                    is_active: p.is_active ? 1 : 0,
+                    primary_image: primaryImg,
+                    images: imgList,
+                    specifications: p.specifications || {},
+                    features: p.features || [],
+                    package_contents: p.package_contents || []
+                };
+            });
+            return res.json({
+                products,
+                pagination: {
+                    total,
+                    page: Number(page),
+                    limit: Number(limit),
+                    totalPages: Math.ceil(total / Number(limit))
+                }
+            });
+        }
         let conditions = ['p.is_active = 1', 'p.deleted_at IS NULL'];
         let params = [];
         // Search query
@@ -390,11 +648,50 @@ exports.productsRouter.get('/', (req, res) => {
 // Admin: Get all products (including inactive) with inventory status
 exports.productsRouter.get('/admin/all', auth_js_1.authenticateToken, auth_js_1.requireAdmin, handleAdminProductsList);
 // Public: Get single product by slug or id
-exports.productsRouter.get('/:slug', (req, res) => {
+exports.productsRouter.get('/:slug', async (req, res) => {
     try {
         const syncStatus = events_js_1.eventBroadcaster.getCatalogSyncStatus();
         (0, cache_js_1.setDynamicCacheControl)(res, syncStatus.catalogVersion, syncStatus.lastUpdated);
-        const product = fetchFullProduct(req.params.slug);
+        let product = fetchFullProduct(req.params.slug);
+        if (!product && (0, database_js_2.isMongoConnected)()) {
+            const isId = /^\d+$/.test(req.params.slug);
+            const query = isId ? { id: Number(req.params.slug) } : { slug: req.params.slug };
+            const mp = await Product_js_1.Product.findOne({ ...query, deleted_at: null }).lean();
+            if (mp) {
+                let primaryImg = mp.image_url;
+                let imgList = [];
+                if (Array.isArray(mp.images) && mp.images.length > 0) {
+                    imgList = mp.images.map((img) => typeof img === 'string' ? { image_url: img } : { image_url: img.url });
+                    if (!primaryImg && imgList.length > 0)
+                        primaryImg = imgList[0].image_url;
+                }
+                product = {
+                    id: mp.id,
+                    name: mp.name,
+                    slug: mp.slug,
+                    sku: mp.sku,
+                    category_id: mp.category_id || 1,
+                    category_slug: mp.category_slug,
+                    category_name: mp.category_slug ? mp.category_slug.replace(/-/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase()) : 'General',
+                    brand: mp.brand || 'VK Technology',
+                    description: mp.description,
+                    short_description: mp.short_description,
+                    regular_price: mp.price,
+                    price: mp.price,
+                    discounted_price: mp.discounted_price,
+                    stock_quantity: mp.stock_quantity,
+                    rating_avg: mp.average_rating || 5.0,
+                    rating_count: mp.ratings_count || 0,
+                    is_featured: mp.is_featured ? 1 : 0,
+                    is_active: mp.is_active ? 1 : 0,
+                    primary_image: primaryImg,
+                    images: imgList,
+                    specifications: mp.specifications || {},
+                    features: mp.features || [],
+                    package_contents: mp.package_contents || []
+                };
+            }
+        }
         if (!product) {
             res.status(404).json({ error: 'Product not found.' });
             return;

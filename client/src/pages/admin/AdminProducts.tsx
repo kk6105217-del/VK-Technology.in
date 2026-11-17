@@ -871,6 +871,9 @@ export const AdminProducts: React.FC = () => {
                           src={p.primary_image || 'https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=100&q=80'}
                           alt={p.name}
                           className="w-10 h-10 object-contain rounded border bg-gray-50 p-1 shrink-0"
+                          onError={(e) => {
+                            (e.currentTarget as HTMLImageElement).src = 'https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=100&q=80';
+                          }}
                         />
                         <div>
                           {activeTab === 'active' ? (
