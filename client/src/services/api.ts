@@ -74,9 +74,14 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
     delete headers['Content-Type'];
   }
 
+  const isGet = !options.method || options.method.toUpperCase() === 'GET';
+  const sep = endpoint.includes('?') ? '&' : '?';
+  const finalEndpoint = isGet ? `${endpoint}${sep}_t=${Date.now()}` : endpoint;
+
   let response: Response;
   try {
-    response = await fetch(`${API_BASE}${endpoint}`, {
+    response = await fetch(`${API_BASE}${finalEndpoint}`, {
+      cache: 'no-store',
       ...options,
       headers,
     });

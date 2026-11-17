@@ -3,8 +3,109 @@ import { db, recordAuditLog, getCanonicalProductsList } from '../database.js';
 import { authenticateToken, requireAdmin, requireSuperAdmin, AuthenticatedRequest } from '../middleware/auth.js';
 import { eventBroadcaster } from '../services/events.js';
 import { setDynamicCacheControl, setPrivateCacheControl } from '../utils/cache.js';
+import { isMongoConnected } from '../config/database.js';
+import { Product as MongoProduct } from '../models/Product.js';
 
 export const productsRouter = Router();
+
+// Helper functions for dual-engine MongoDB Atlas synchronization
+async function syncProductToMongo(prod: any) {
+  if (!isMongoConnected() || !prod) return;
+  try {
+    const mongoData: any = {
+      id: Number(prod.id),
+      name: prod.name,
+      slug: prod.slug,
+      sku: prod.sku,
+      category_id: prod.category_id ? Number(prod.category_id) : undefined,
+      category_slug: prod.category_slug || 'diy-electronics',
+      brand: prod.brand || 'VK Technology',
+      description: prod.description || prod.name,
+      short_description: prod.short_description || undefined,
+      image_url: prod.primary_image || (Array.isArray(prod.images) && prod.images[0] ? (typeof prod.images[0] === 'string' ? prod.images[0] : prod.images[0].url || prod.images[0].image_url) : 'https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=800&q=80'),
+      price: Number(prod.regular_price),
+      discounted_price: (prod.discounted_price !== null && prod.discounted_price !== undefined) ? Number(prod.discounted_price) : undefined,
+      stock_quantity: Number(prod.stock_quantity || 0),
+      specifications: prod.specifications || {},
+      compatibility: prod.compatibility || 'Arduino IDE, PlatformIO, ESP-IDF, Raspberry Pi OS',
+      is_featured: !!prod.is_featured,
+      is_active: !!prod.is_active,
+      deleted_at: prod.deleted_at ? new Date(prod.deleted_at) : null,
+    };
+
+    if (Array.isArray(prod.images)) {
+      mongoData.images = prod.images.map((img: any, i: number) => ({
+        url: typeof img === 'string' ? img : (img.image_url || img.url),
+        sort_order: i,
+        is_primary: i === 0
+      }));
+    }
+
+    await MongoProduct.findOneAndUpdate(
+      { $or: [{ id: Number(prod.id) }, { sku: prod.sku }] },
+      { $set: mongoData },
+      { upsert: true, new: true, runValidators: true }
+    );
+  } catch (err) {
+    console.warn('[MongoSync] Failed to sync product to MongoDB Atlas:', err);
+  }
+}
+
+async function syncArchiveProductToMongo(idOrIds: number | number[], isArchived: boolean, isActive: boolean = false) {
+  if (!isMongoConnected()) return;
+  try {
+    const ids = (Array.isArray(idOrIds) ? idOrIds : [idOrIds]).map(Number).filter(n => !isNaN(n));
+    await MongoProduct.updateMany(
+      { id: { $in: ids } },
+      {
+        $set: {
+          deleted_at: isArchived ? new Date() : null,
+          is_active: isActive
+        }
+      },
+      { runValidators: true }
+    );
+  } catch (err) {
+    console.warn('[MongoSync] Failed to sync archive state to MongoDB Atlas:', err);
+  }
+}
+
+async function syncStockToMongo(productId: number, newStock: number) {
+  if (!isMongoConnected()) return;
+  try {
+    await MongoProduct.updateOne(
+      { id: Number(productId) },
+      { $set: { stock_quantity: Number(newStock) } },
+      { runValidators: true }
+    );
+  } catch (err) {
+    console.warn('[MongoSync] Failed to sync stock to MongoDB Atlas:', err);
+  }
+}
+
+async function syncStatusToMongo(idOrIds: number | number[], isActive: boolean) {
+  if (!isMongoConnected()) return;
+  try {
+    const ids = (Array.isArray(idOrIds) ? idOrIds : [idOrIds]).map(Number).filter(n => !isNaN(n));
+    await MongoProduct.updateMany(
+      { id: { $in: ids } },
+      { $set: { is_active: isActive } },
+      { runValidators: true }
+    );
+  } catch (err) {
+    console.warn('[MongoSync] Failed to sync status to MongoDB Atlas:', err);
+  }
+}
+
+async function syncPermanentDeleteToMongo(ids: number[]) {
+  if (!isMongoConnected()) return;
+  try {
+    const validIds = ids.map(Number).filter(n => !isNaN(n));
+    await MongoProduct.deleteMany({ id: { $in: validIds } });
+  } catch (err) {
+    console.warn('[MongoSync] Failed to sync permanent deletion to MongoDB Atlas:', err);
+  }
+}
 
 // Helper to fetch full populated product record
 function fetchFullProduct(idOrSlug: number | string, allowArchived: boolean = false): any {
@@ -98,7 +199,23 @@ export function handleAdminProductsList(req: AuthenticatedRequest, res: Response
       ORDER BY p.id DESC
     `;
 
-    const products = db.prepare(sql).all(...params);
+    const products = db.prepare(sql).all(...params) as any[];
+    const imgStmt = db.prepare('SELECT image_url FROM product_images WHERE product_id = ? ORDER BY is_primary DESC, sort_order ASC');
+    products.forEach((p: any) => {
+      try { p.specifications = JSON.parse(p.specifications_json || '{}'); } catch { p.specifications = {}; }
+      try { p.features = JSON.parse(p.features_json || '[]'); } catch { p.features = []; }
+      try { p.package_contents = JSON.parse(p.package_contents_json || '[]'); } catch { p.package_contents = []; }
+      try {
+        const rows = imgStmt.all(p.id) as { image_url: string }[];
+        p.images = rows.map(r => r.image_url);
+        if (!p.primary_image && p.images.length > 0) {
+          p.primary_image = p.images[0];
+        }
+      } catch {
+        p.images = p.primary_image ? [p.primary_image] : [];
+      }
+    });
+
     res.json({ products });
   } catch (error: any) {
     res.status(500).json({ error: 'Failed to fetch admin products.' });
@@ -327,7 +444,7 @@ productsRouter.get('/:slug', (req, res) => {
 });
 
 // Admin: Create product
-productsRouter.post('/', authenticateToken, requireAdmin, (req: AuthenticatedRequest, res: Response) => {
+productsRouter.post('/', authenticateToken, requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const {
       name,
@@ -467,6 +584,9 @@ productsRouter.post('/', authenticateToken, requireAdmin, (req: AuthenticatedReq
     // Fetch the full newly created product record
     const savedProduct = fetchFullProduct(productId);
 
+    // Sync to MongoDB Atlas with validation
+    await syncProductToMongo(savedProduct);
+
     // Broadcast real-time product creation to all connected accounts and devices
     try {
       eventBroadcaster.broadcast('PRODUCT_CREATED', savedProduct);
@@ -486,9 +606,12 @@ productsRouter.post('/', authenticateToken, requireAdmin, (req: AuthenticatedReq
 });
 
 // Admin: Update product
-productsRouter.put('/:id', authenticateToken, requireAdmin, (req: AuthenticatedRequest, res: Response) => {
+productsRouter.put('/:id', authenticateToken, requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const productId = req.params.id;
+    const rawId = req.params.id;
+    const isNumericId = /^\d+$/.test(String(rawId));
+    let existingProduct = db.prepare(isNumericId ? 'SELECT * FROM products WHERE id = ?' : 'SELECT * FROM products WHERE slug = ?').get(rawId) as any;
+    const productId = existingProduct ? existingProduct.id : (isNumericId ? Number(rawId) : rawId);
     const {
       name,
       slug,
@@ -513,8 +636,6 @@ productsRouter.put('/:id', authenticateToken, requireAdmin, (req: AuthenticatedR
       images,
       primary_image
     } = req.body;
-
-    const existingProduct = db.prepare('SELECT * FROM products WHERE id = ?').get(productId) as any;
 
     if (!existingProduct && !name) {
       res.status(404).json({ error: 'Product not found.' });
@@ -671,6 +792,9 @@ productsRouter.put('/:id', authenticateToken, requireAdmin, (req: AuthenticatedR
     // Fetch the updated product record with all populated fields
     const updatedProduct = fetchFullProduct(productId);
 
+    // Sync to MongoDB Atlas with validation
+    await syncProductToMongo(updatedProduct);
+
     // Broadcast real-time product update to all connected accounts and devices
     try {
       eventBroadcaster.broadcast('PRODUCT_UPDATED', updatedProduct);
@@ -689,10 +813,13 @@ productsRouter.put('/:id', authenticateToken, requireAdmin, (req: AuthenticatedR
 });
 
 // Admin: Quick update stock
-productsRouter.patch('/:id/stock', authenticateToken, requireAdmin, (req: AuthenticatedRequest, res: Response) => {
+productsRouter.patch('/:id/stock', authenticateToken, requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { stock_quantity } = req.body;
-    const productId = req.params.id;
+    const rawId = req.params.id;
+    const isNumericId = /^\d+$/.test(String(rawId));
+    let existingProduct = db.prepare(isNumericId ? 'SELECT * FROM products WHERE id = ?' : 'SELECT * FROM products WHERE slug = ?').get(rawId) as any;
+    const productId = existingProduct ? existingProduct.id : (isNumericId ? Number(rawId) : rawId);
 
     if (stock_quantity === undefined || isNaN(Number(stock_quantity)) || Number(stock_quantity) < 0) {
       res.status(400).json({ error: 'Valid stock quantity is required.' });
@@ -715,6 +842,9 @@ productsRouter.patch('/:id/stock', authenticateToken, requireAdmin, (req: Authen
 
     const updatedProduct = fetchFullProduct(productId);
 
+    // Sync to MongoDB Atlas
+    await syncStockToMongo(Number(productId), Number(stock_quantity));
+
     try {
       eventBroadcaster.broadcast('STOCK_CHANGED', {
         product: updatedProduct,
@@ -734,10 +864,13 @@ productsRouter.patch('/:id/stock', authenticateToken, requireAdmin, (req: Authen
 });
 
 // Admin: Quick toggle publish / unpublish
-productsRouter.patch('/:id/status', authenticateToken, requireAdmin, (req: AuthenticatedRequest, res: Response) => {
+productsRouter.patch('/:id/status', authenticateToken, requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { is_active } = req.body;
-    const productId = req.params.id;
+    const rawId = req.params.id;
+    const isNumericId = /^\d+$/.test(String(rawId));
+    let existingProduct = db.prepare(isNumericId ? 'SELECT * FROM products WHERE id = ?' : 'SELECT * FROM products WHERE slug = ?').get(rawId) as any;
+    const productId = existingProduct ? existingProduct.id : (isNumericId ? Number(rawId) : rawId);
 
     db.prepare(`
       UPDATE products 
@@ -754,6 +887,9 @@ productsRouter.patch('/:id/status', authenticateToken, requireAdmin, (req: Authe
     );
 
     const updatedProduct = fetchFullProduct(productId);
+
+    // Sync to MongoDB Atlas
+    await syncStatusToMongo(Number(productId), !!is_active);
 
     try {
       eventBroadcaster.broadcast('PRODUCT_UPDATED', {
@@ -774,7 +910,7 @@ productsRouter.patch('/:id/status', authenticateToken, requireAdmin, (req: Authe
 });
 
 // Admin: Soft-Archive Products (Move to Recycle Bin)
-const bulkArchiveProductsHandler = (req: AuthenticatedRequest, res: Response) => {
+const bulkArchiveProductsHandler = async (req: AuthenticatedRequest, res: Response) => {
   try {
     let { ids, all } = req.body || {};
 
@@ -817,6 +953,9 @@ const bulkArchiveProductsHandler = (req: AuthenticatedRequest, res: Response) =>
       throw txErr;
     }
 
+    // Sync to MongoDB Atlas
+    await syncArchiveProductToMongo(targetIds, true, false);
+
     // Broadcast live event for synchronization across all clients
     try {
       eventBroadcaster.broadcast('PRODUCT_DELETED', { 
@@ -854,7 +993,7 @@ productsRouter.delete('/all', authenticateToken, requireAdmin, (req: Authenticat
 });
 
 // Admin: Bulk Toggle Status (Publish / Unpublish)
-const bulkStatusProductsHandler = (req: AuthenticatedRequest, res: Response) => {
+const bulkStatusProductsHandler = async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { ids, is_active } = req.body || {};
     if (!Array.isArray(ids) || ids.length === 0) {
@@ -889,6 +1028,9 @@ const bulkStatusProductsHandler = (req: AuthenticatedRequest, res: Response) => 
       throw txErr;
     }
 
+    // Sync to MongoDB Atlas
+    await syncStatusToMongo(targetIds, !!is_active);
+
     try {
       eventBroadcaster.broadcast('PRODUCT_UPDATED', {
         ids: targetIds,
@@ -911,14 +1053,16 @@ productsRouter.post('/admin/bulk-status', authenticateToken, requireAdmin, bulkS
 productsRouter.post('/bulk-status', authenticateToken, requireAdmin, bulkStatusProductsHandler);
 
 // Admin: Soft-Archive Single Product (Move to Recycle Bin)
-const archiveProductHandler = (req: AuthenticatedRequest, res: Response) => {
+const archiveProductHandler = async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const productId = req.params.id;
-    const existing = db.prepare('SELECT id, name, sku FROM products WHERE id = ?').get(productId) as any;
+    const rawId = req.params.id;
+    const isNumericId = /^\d+$/.test(String(rawId));
+    let existing = db.prepare(isNumericId ? 'SELECT id, name, sku FROM products WHERE id = ?' : 'SELECT id, name, sku FROM products WHERE slug = ?').get(rawId) as any;
     if (!existing) {
       res.status(404).json({ error: 'Product not found.' });
       return;
     }
+    const productId = existing.id;
 
     db.prepare(`
       UPDATE products 
@@ -933,6 +1077,9 @@ const archiveProductHandler = (req: AuthenticatedRequest, res: Response) => {
       productId,
       { name: existing.name, sku: existing.sku }
     );
+
+    // Sync to MongoDB Atlas
+    await syncArchiveProductToMongo(Number(productId), true, false);
 
     try {
       eventBroadcaster.broadcast('PRODUCT_DELETED', { id: Number(productId), archived: true });
@@ -956,14 +1103,16 @@ productsRouter.post('/:id/archive', authenticateToken, requireAdmin, archiveProd
 productsRouter.post('/admin/:id/archive', authenticateToken, requireAdmin, archiveProductHandler);
 
 // Admin: Restore Single Product from Recycle Bin
-const restoreProductHandler = (req: AuthenticatedRequest, res: Response) => {
+const restoreProductHandler = async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const productId = req.params.id;
-    const existing = db.prepare('SELECT id, name, sku FROM products WHERE id = ?').get(productId) as any;
+    const rawId = req.params.id;
+    const isNumericId = /^\d+$/.test(String(rawId));
+    let existing = db.prepare(isNumericId ? 'SELECT id, name, sku FROM products WHERE id = ?' : 'SELECT id, name, sku FROM products WHERE slug = ?').get(rawId) as any;
     if (!existing) {
       res.status(404).json({ error: 'Product not found.' });
       return;
     }
+    const productId = existing.id;
 
     db.prepare(`
       UPDATE products 
@@ -980,6 +1129,9 @@ const restoreProductHandler = (req: AuthenticatedRequest, res: Response) => {
     );
 
     const fullProduct = fetchFullProduct(productId);
+
+    // Sync to MongoDB Atlas
+    await syncArchiveProductToMongo(Number(productId), false, true);
 
     try {
       eventBroadcaster.broadcast('PRODUCT_UPDATED', fullProduct);
@@ -1000,7 +1152,7 @@ productsRouter.post('/:id/restore', authenticateToken, requireAdmin, restoreProd
 productsRouter.post('/admin/:id/restore', authenticateToken, requireAdmin, restoreProductHandler);
 
 // Admin: Bulk Restore Products from Recycle Bin
-const bulkRestoreProductsHandler = (req: AuthenticatedRequest, res: Response) => {
+const bulkRestoreProductsHandler = async (req: AuthenticatedRequest, res: Response) => {
   try {
     let { ids, all } = req.body || {};
 
@@ -1043,6 +1195,9 @@ const bulkRestoreProductsHandler = (req: AuthenticatedRequest, res: Response) =>
       throw txErr;
     }
 
+    // Sync to MongoDB Atlas
+    await syncArchiveProductToMongo(targetIds, false, true);
+
     try {
       eventBroadcaster.broadcast('PRODUCT_UPDATED', { restoredIds: targetIds });
     } catch {}
@@ -1068,7 +1223,7 @@ productsRouter.get('/admin/recycle-bin', authenticateToken, requireAdmin, (req: 
 });
 
 // Super Admin ONLY: Strictly Protected Permanent Deletion
-productsRouter.post('/admin/permanent-delete', authenticateToken, requireSuperAdmin, (req: AuthenticatedRequest, res: Response) => {
+productsRouter.post('/admin/permanent-delete', authenticateToken, requireSuperAdmin, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { ids, id, confirmPhrase } = req.body || {};
 
@@ -1145,6 +1300,9 @@ productsRouter.post('/admin/permanent-delete', authenticateToken, requireSuperAd
       try { db.exec('ROLLBACK'); } catch {}
       throw txErr;
     }
+
+    // Sync permanent deletion to MongoDB Atlas
+    await syncPermanentDeleteToMongo(deletableIds);
 
     try {
       eventBroadcaster.broadcast('PRODUCT_PERMANENTLY_DELETED', { ids: deletableIds });

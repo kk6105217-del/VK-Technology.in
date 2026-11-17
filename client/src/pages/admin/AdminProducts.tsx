@@ -88,18 +88,9 @@ export const AdminProducts: React.FC = () => {
   const [images, setImages] = useState<string[]>([]);
   const [uploadingImage, setUploadingImage] = useState(false);
 
-  useEffect(() => {
-    loadData();
-  }, []);
-
-  // Real-time synchronization: automatically reload if any product updates
-  useCatalogSync(() => {
-    loadData();
-  });
-
-  const loadData = async () => {
+  const loadData = async (showLoading: boolean = false) => {
     try {
-      setIsLoading(true);
+      if (showLoading) setIsLoading(true);
       const [catsRes, prodsRes, binRes] = await Promise.all([
         api.categories.getAll(),
         api.products.getAdminAll({ status: 'all' }),
@@ -112,11 +103,60 @@ export const AdminProducts: React.FC = () => {
         setCategoryId(catsRes.categories[0].id);
       }
     } catch (e) {
-      console.error(e);
+      console.error('[AdminProducts] loadData error:', e);
     } finally {
-      setIsLoading(false);
+      if (showLoading) setIsLoading(false);
     }
   };
+
+  useEffect(() => {
+    loadData(true);
+
+    // Automatic background polling every 5 seconds for real-time synchronization
+    const pollInterval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        loadData(false);
+      }
+    }, 5000);
+
+    // Window focus instant refetch
+    const handleFocus = () => {
+      loadData(false);
+    };
+    window.addEventListener('focus', handleFocus);
+
+    return () => {
+      clearInterval(pollInterval);
+      window.removeEventListener('focus', handleFocus);
+    };
+  }, []);
+
+  // Real-time synchronization: merge incoming events directly into state
+  useCatalogSync((event) => {
+    if (!event) {
+      loadData(false);
+      return;
+    }
+
+    if (event.type === 'PRODUCT_UPDATED' && (event.data?.id || (event.data as any)?.product?.id)) {
+      const updatedId = Number(event.data?.id || (event.data as any)?.product?.id);
+      const updatedObj = (event.data as any)?.product || event.data;
+      setProducts(prev => prev.map(p => p.id === updatedId ? { ...p, ...updatedObj } : p));
+      loadData(false);
+    } else if (event.type === 'STOCK_CHANGED' && event.data?.id) {
+      const { id, stock_quantity } = event.data;
+      setProducts(prev => prev.map(p => p.id === Number(id) ? { ...p, stock_quantity: Number(stock_quantity) } : p));
+      loadData(false);
+    } else if (event.type === 'PRODUCT_DELETED') {
+      const delId = Number(event.data?.id || (event.data?.archivedIds && event.data.archivedIds[0]));
+      if (delId) {
+        setProducts(prev => prev.filter(p => p.id !== delId));
+      }
+      loadData(false);
+    } else {
+      loadData(false);
+    }
+  });
 
   const openCreateModal = () => {
     setEditingProduct(null);
@@ -265,14 +305,20 @@ export const AdminProducts: React.FC = () => {
     try {
       setFormSubmitting(true);
       if (editingProduct) {
-        await api.products.update(editingProduct.id, payload);
+        const res = await api.products.update(editingProduct.id, payload);
+        // Instant local state update
+        const updated = (res && res.product) ? res.product : ({ ...editingProduct, ...payload } as any as Product);
+        setProducts(prev => prev.map(p => p.id === editingProduct.id ? ({ ...p, ...updated } as Product) : p));
         setFormSuccess('Product price and photos updated successfully.');
       } else {
-        await api.products.create(payload);
+        const res = await api.products.create(payload);
+        // Instant local state update
+        const newProd = (res && res.product) ? res.product : { ...payload, id: res?.productId || Date.now() };
+        setProducts(prev => [newProd as any, ...prev]);
         setFormSuccess('Product created successfully.');
       }
-      await loadData();
-      setTimeout(() => setIsModalOpen(false), 1200);
+      loadData(false);
+      setTimeout(() => setIsModalOpen(false), 800);
     } catch (err: any) {
       setFormError(err.message || 'Failed to save product.');
     } finally {
@@ -284,10 +330,17 @@ export const AdminProducts: React.FC = () => {
   const handleArchiveProduct = async (id: number, prodName: string) => {
     if (window.confirm(`Move "${prodName}" to the Recycle Bin?\n\nIt will be unpublished from the public storefront and customer checkout, but safely preserved in the database.`)) {
       try {
+        // Immediate 0ms local state update
+        const target = products.find(p => p.id === id);
+        if (target) {
+          setProducts(prev => prev.filter(p => p.id !== id));
+          setRecycleBinProducts(prev => [{ ...target, is_active: false, deleted_at: new Date().toISOString() }, ...prev]);
+        }
         await api.products.archive(id);
-        await loadData();
+        loadData(false);
       } catch (err: any) {
         alert(err.message || 'Failed to archive product');
+        loadData(false);
       }
     }
   };
@@ -295,28 +348,41 @@ export const AdminProducts: React.FC = () => {
   // Restore product from Recycle Bin back to Active catalog
   const handleRestoreProduct = async (id: number, prodName: string) => {
     try {
+      // Immediate 0ms local state update
+      const target = recycleBinProducts.find(p => p.id === id);
+      if (target) {
+        setRecycleBinProducts(prev => prev.filter(p => p.id !== id));
+        setProducts(prev => [{ ...target, is_active: true, deleted_at: null }, ...prev]);
+      }
       await api.products.restore(id);
-      await loadData();
+      loadData(false);
     } catch (err: any) {
       alert(err.message || 'Failed to restore product');
+      loadData(false);
     }
   };
 
   const handleToggleStatus = async (id: number, currentStatus: boolean | number) => {
     try {
-      await api.products.toggleStatus(id, !currentStatus);
-      await loadData();
+      const nextStatus = !currentStatus;
+      setProducts(prev => prev.map(p => p.id === id ? { ...p, is_active: nextStatus } : p));
+      await api.products.toggleStatus(id, nextStatus);
+      loadData(false);
     } catch (e: any) {
       alert(e.message || 'Status toggle failed');
+      loadData(false);
     }
   };
 
   const handleQuickStock = async (id: number, newStock: number) => {
     try {
-      await api.products.updateStock(id, Math.max(0, newStock));
-      await loadData();
+      const val = Math.max(0, newStock);
+      setProducts(prev => prev.map(p => p.id === id ? { ...p, stock_quantity: val } : p));
+      await api.products.updateStock(id, val);
+      loadData(false);
     } catch (e: any) {
       alert(e.message || 'Stock update failed');
+      loadData(false);
     }
   };
 
@@ -352,12 +418,20 @@ export const AdminProducts: React.FC = () => {
     if (window.confirm(confirmPrompt)) {
       try {
         setIsBulkOperating(true);
-        const res = await api.products.bulkArchive(selectedProductIds);
+        const idsToArchive = [...selectedProductIds];
+        const archivedItems = products.filter(p => idsToArchive.includes(p.id));
+        setProducts(prev => prev.filter(p => !idsToArchive.includes(p.id)));
+        setRecycleBinProducts(prev => [
+          ...archivedItems.map(p => ({ ...p, is_active: false, deleted_at: new Date().toISOString() })),
+          ...prev
+        ]);
         setSelectedProductIds([]);
-        await loadData();
+        const res = await api.products.bulkArchive(idsToArchive);
+        loadData(false);
         alert(res.message);
       } catch (err: any) {
         alert(err.message || 'Failed to archive selected products.');
+        loadData(false);
       } finally {
         setIsBulkOperating(false);
       }
@@ -369,12 +443,20 @@ export const AdminProducts: React.FC = () => {
     if (selectedProductIds.length === 0) return;
     try {
       setIsBulkOperating(true);
-      const res = await api.products.bulkRestore(selectedProductIds);
+      const idsToRestore = [...selectedProductIds];
+      const restoredItems = recycleBinProducts.filter(p => idsToRestore.includes(p.id));
+      setRecycleBinProducts(prev => prev.filter(p => !idsToRestore.includes(p.id)));
+      setProducts(prev => [
+        ...restoredItems.map(p => ({ ...p, is_active: true, deleted_at: null })),
+        ...prev
+      ]);
       setSelectedProductIds([]);
-      await loadData();
+      const res = await api.products.bulkRestore(idsToRestore);
+      loadData(false);
       alert(res.message);
     } catch (err: any) {
       alert(err.message || 'Failed to restore selected products.');
+      loadData(false);
     } finally {
       setIsBulkOperating(false);
     }
@@ -398,16 +480,20 @@ export const AdminProducts: React.FC = () => {
     try {
       setIsPermDeleting(true);
       setPermError('');
+      const targetIds = [...permanentTargetIds];
+      setRecycleBinProducts(prev => prev.filter(p => !targetIds.includes(p.id)));
+      setProducts(prev => prev.filter(p => !targetIds.includes(p.id)));
       const res = await api.products.permanentDelete({
-        ids: permanentTargetIds,
+        ids: targetIds,
         confirmPhrase
       });
       setIsPermanentModalOpen(false);
       setSelectedProductIds([]);
-      await loadData();
+      loadData(false);
       alert(res.message);
     } catch (err: any) {
       setPermError(err.message || 'Permanent deletion failed.');
+      loadData(false);
     } finally {
       setIsPermDeleting(false);
     }
@@ -450,11 +536,14 @@ export const AdminProducts: React.FC = () => {
     if (selectedProductIds.length === 0) return;
     try {
       setIsBulkOperating(true);
-      const res = await api.products.bulkToggleStatus(selectedProductIds, publish);
-      await loadData();
+      const ids = [...selectedProductIds];
+      setProducts(prev => prev.map(p => ids.includes(p.id) ? { ...p, is_active: publish } : p));
+      const res = await api.products.bulkToggleStatus(ids, publish);
+      loadData(false);
       alert(res.message);
     } catch (err: any) {
       alert(err.message || 'Failed to update selected products.');
+      loadData(false);
     } finally {
       setIsBulkOperating(false);
     }

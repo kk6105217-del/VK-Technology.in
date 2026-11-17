@@ -7,7 +7,95 @@ const database_js_1 = require("../database.js");
 const auth_js_1 = require("../middleware/auth.js");
 const events_js_1 = require("../services/events.js");
 const cache_js_1 = require("../utils/cache.js");
+const database_js_2 = require("../config/database.js");
+const Product_js_1 = require("../models/Product.js");
 exports.productsRouter = (0, express_1.Router)();
+// Helper functions for dual-engine MongoDB Atlas synchronization
+async function syncProductToMongo(prod) {
+    if (!(0, database_js_2.isMongoConnected)() || !prod)
+        return;
+    try {
+        const mongoData = {
+            id: Number(prod.id),
+            name: prod.name,
+            slug: prod.slug,
+            sku: prod.sku,
+            category_id: prod.category_id ? Number(prod.category_id) : undefined,
+            category_slug: prod.category_slug || 'diy-electronics',
+            brand: prod.brand || 'VK Technology',
+            description: prod.description || prod.name,
+            short_description: prod.short_description || undefined,
+            image_url: prod.primary_image || (Array.isArray(prod.images) && prod.images[0] ? (typeof prod.images[0] === 'string' ? prod.images[0] : prod.images[0].url || prod.images[0].image_url) : 'https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=800&q=80'),
+            price: Number(prod.regular_price),
+            discounted_price: (prod.discounted_price !== null && prod.discounted_price !== undefined) ? Number(prod.discounted_price) : undefined,
+            stock_quantity: Number(prod.stock_quantity || 0),
+            specifications: prod.specifications || {},
+            compatibility: prod.compatibility || 'Arduino IDE, PlatformIO, ESP-IDF, Raspberry Pi OS',
+            is_featured: !!prod.is_featured,
+            is_active: !!prod.is_active,
+            deleted_at: prod.deleted_at ? new Date(prod.deleted_at) : null,
+        };
+        if (Array.isArray(prod.images)) {
+            mongoData.images = prod.images.map((img, i) => ({
+                url: typeof img === 'string' ? img : (img.image_url || img.url),
+                sort_order: i,
+                is_primary: i === 0
+            }));
+        }
+        await Product_js_1.Product.findOneAndUpdate({ $or: [{ id: Number(prod.id) }, { sku: prod.sku }] }, { $set: mongoData }, { upsert: true, new: true, runValidators: true });
+    }
+    catch (err) {
+        console.warn('[MongoSync] Failed to sync product to MongoDB Atlas:', err);
+    }
+}
+async function syncArchiveProductToMongo(idOrIds, isArchived, isActive = false) {
+    if (!(0, database_js_2.isMongoConnected)())
+        return;
+    try {
+        const ids = (Array.isArray(idOrIds) ? idOrIds : [idOrIds]).map(Number).filter(n => !isNaN(n));
+        await Product_js_1.Product.updateMany({ id: { $in: ids } }, {
+            $set: {
+                deleted_at: isArchived ? new Date() : null,
+                is_active: isActive
+            }
+        }, { runValidators: true });
+    }
+    catch (err) {
+        console.warn('[MongoSync] Failed to sync archive state to MongoDB Atlas:', err);
+    }
+}
+async function syncStockToMongo(productId, newStock) {
+    if (!(0, database_js_2.isMongoConnected)())
+        return;
+    try {
+        await Product_js_1.Product.updateOne({ id: Number(productId) }, { $set: { stock_quantity: Number(newStock) } }, { runValidators: true });
+    }
+    catch (err) {
+        console.warn('[MongoSync] Failed to sync stock to MongoDB Atlas:', err);
+    }
+}
+async function syncStatusToMongo(idOrIds, isActive) {
+    if (!(0, database_js_2.isMongoConnected)())
+        return;
+    try {
+        const ids = (Array.isArray(idOrIds) ? idOrIds : [idOrIds]).map(Number).filter(n => !isNaN(n));
+        await Product_js_1.Product.updateMany({ id: { $in: ids } }, { $set: { is_active: isActive } }, { runValidators: true });
+    }
+    catch (err) {
+        console.warn('[MongoSync] Failed to sync status to MongoDB Atlas:', err);
+    }
+}
+async function syncPermanentDeleteToMongo(ids) {
+    if (!(0, database_js_2.isMongoConnected)())
+        return;
+    try {
+        const validIds = ids.map(Number).filter(n => !isNaN(n));
+        await Product_js_1.Product.deleteMany({ id: { $in: validIds } });
+    }
+    catch (err) {
+        console.warn('[MongoSync] Failed to sync permanent deletion to MongoDB Atlas:', err);
+    }
+}
 // Helper to fetch full populated product record
 function fetchFullProduct(idOrSlug, allowArchived = false) {
     const isId = /^\d+$/.test(String(idOrSlug));
@@ -112,6 +200,37 @@ function handleAdminProductsList(req, res) {
       ORDER BY p.id DESC
     `;
         const products = database_js_1.db.prepare(sql).all(...params);
+        const imgStmt = database_js_1.db.prepare('SELECT image_url FROM product_images WHERE product_id = ? ORDER BY is_primary DESC, sort_order ASC');
+        products.forEach((p) => {
+            try {
+                p.specifications = JSON.parse(p.specifications_json || '{}');
+            }
+            catch {
+                p.specifications = {};
+            }
+            try {
+                p.features = JSON.parse(p.features_json || '[]');
+            }
+            catch {
+                p.features = [];
+            }
+            try {
+                p.package_contents = JSON.parse(p.package_contents_json || '[]');
+            }
+            catch {
+                p.package_contents = [];
+            }
+            try {
+                const rows = imgStmt.all(p.id);
+                p.images = rows.map(r => r.image_url);
+                if (!p.primary_image && p.images.length > 0) {
+                    p.primary_image = p.images[0];
+                }
+            }
+            catch {
+                p.images = p.primary_image ? [p.primary_image] : [];
+            }
+        });
         res.json({ products });
     }
     catch (error) {
@@ -321,7 +440,7 @@ exports.productsRouter.get('/:slug', (req, res) => {
     }
 });
 // Admin: Create product
-exports.productsRouter.post('/', auth_js_1.authenticateToken, auth_js_1.requireAdmin, (req, res) => {
+exports.productsRouter.post('/', auth_js_1.authenticateToken, auth_js_1.requireAdmin, async (req, res) => {
     try {
         const { name, slug, sku, category_id, subcategory, short_description, description, regular_price, discounted_price, stock_quantity, brand, specifications, features, compatibility, package_contents, shipping_weight_grams, estimated_dispatch_days, warranty_info, is_featured, is_active, images = [] } = req.body;
         // Strict input validation
@@ -407,6 +526,8 @@ exports.productsRouter.post('/', auth_js_1.authenticateToken, auth_js_1.requireA
         }
         // Fetch the full newly created product record
         const savedProduct = fetchFullProduct(productId);
+        // Sync to MongoDB Atlas with validation
+        await syncProductToMongo(savedProduct);
         // Broadcast real-time product creation to all connected accounts and devices
         try {
             events_js_1.eventBroadcaster.broadcast('PRODUCT_CREATED', savedProduct);
@@ -426,11 +547,13 @@ exports.productsRouter.post('/', auth_js_1.authenticateToken, auth_js_1.requireA
     }
 });
 // Admin: Update product
-exports.productsRouter.put('/:id', auth_js_1.authenticateToken, auth_js_1.requireAdmin, (req, res) => {
+exports.productsRouter.put('/:id', auth_js_1.authenticateToken, auth_js_1.requireAdmin, async (req, res) => {
     try {
-        const productId = req.params.id;
+        const rawId = req.params.id;
+        const isNumericId = /^\d+$/.test(String(rawId));
+        let existingProduct = database_js_1.db.prepare(isNumericId ? 'SELECT * FROM products WHERE id = ?' : 'SELECT * FROM products WHERE slug = ?').get(rawId);
+        const productId = existingProduct ? existingProduct.id : (isNumericId ? Number(rawId) : rawId);
         const { name, slug, sku, category_id, subcategory, short_description, description, regular_price, discounted_price, stock_quantity, brand, specifications, features, compatibility, package_contents, shipping_weight_grams, estimated_dispatch_days, warranty_info, is_featured, is_active, images, primary_image } = req.body;
-        const existingProduct = database_js_1.db.prepare('SELECT * FROM products WHERE id = ?').get(productId);
         if (!existingProduct && !name) {
             res.status(404).json({ error: 'Product not found.' });
             return;
@@ -534,6 +657,8 @@ exports.productsRouter.put('/:id', auth_js_1.authenticateToken, auth_js_1.requir
         }
         // Fetch the updated product record with all populated fields
         const updatedProduct = fetchFullProduct(productId);
+        // Sync to MongoDB Atlas with validation
+        await syncProductToMongo(updatedProduct);
         // Broadcast real-time product update to all connected accounts and devices
         try {
             events_js_1.eventBroadcaster.broadcast('PRODUCT_UPDATED', updatedProduct);
@@ -552,10 +677,13 @@ exports.productsRouter.put('/:id', auth_js_1.authenticateToken, auth_js_1.requir
     }
 });
 // Admin: Quick update stock
-exports.productsRouter.patch('/:id/stock', auth_js_1.authenticateToken, auth_js_1.requireAdmin, (req, res) => {
+exports.productsRouter.patch('/:id/stock', auth_js_1.authenticateToken, auth_js_1.requireAdmin, async (req, res) => {
     try {
         const { stock_quantity } = req.body;
-        const productId = req.params.id;
+        const rawId = req.params.id;
+        const isNumericId = /^\d+$/.test(String(rawId));
+        let existingProduct = database_js_1.db.prepare(isNumericId ? 'SELECT * FROM products WHERE id = ?' : 'SELECT * FROM products WHERE slug = ?').get(rawId);
+        const productId = existingProduct ? existingProduct.id : (isNumericId ? Number(rawId) : rawId);
         if (stock_quantity === undefined || isNaN(Number(stock_quantity)) || Number(stock_quantity) < 0) {
             res.status(400).json({ error: 'Valid stock quantity is required.' });
             return;
@@ -567,6 +695,8 @@ exports.productsRouter.patch('/:id/stock', auth_js_1.authenticateToken, auth_js_
     `).run(Number(stock_quantity), productId);
         (0, database_js_1.recordAuditLog)(req.user?.email || 'admin@vktechnology.shop', 'UPDATE_STOCK', 'Product', productId, { new_stock: stock_quantity });
         const updatedProduct = fetchFullProduct(productId);
+        // Sync to MongoDB Atlas
+        await syncStockToMongo(Number(productId), Number(stock_quantity));
         try {
             events_js_1.eventBroadcaster.broadcast('STOCK_CHANGED', {
                 product: updatedProduct,
@@ -586,10 +716,13 @@ exports.productsRouter.patch('/:id/stock', auth_js_1.authenticateToken, auth_js_
     }
 });
 // Admin: Quick toggle publish / unpublish
-exports.productsRouter.patch('/:id/status', auth_js_1.authenticateToken, auth_js_1.requireAdmin, (req, res) => {
+exports.productsRouter.patch('/:id/status', auth_js_1.authenticateToken, auth_js_1.requireAdmin, async (req, res) => {
     try {
         const { is_active } = req.body;
-        const productId = req.params.id;
+        const rawId = req.params.id;
+        const isNumericId = /^\d+$/.test(String(rawId));
+        let existingProduct = database_js_1.db.prepare(isNumericId ? 'SELECT * FROM products WHERE id = ?' : 'SELECT * FROM products WHERE slug = ?').get(rawId);
+        const productId = existingProduct ? existingProduct.id : (isNumericId ? Number(rawId) : rawId);
         database_js_1.db.prepare(`
       UPDATE products 
       SET is_active = ?, version = version + 1, updated_at = datetime('now') 
@@ -597,6 +730,8 @@ exports.productsRouter.patch('/:id/status', auth_js_1.authenticateToken, auth_js
     `).run(is_active ? 1 : 0, productId);
         (0, database_js_1.recordAuditLog)(req.user?.email || 'admin@vktechnology.shop', is_active ? 'PUBLISH_PRODUCT' : 'UNPUBLISH_PRODUCT', 'Product', productId, { is_active: !!is_active });
         const updatedProduct = fetchFullProduct(productId);
+        // Sync to MongoDB Atlas
+        await syncStatusToMongo(Number(productId), !!is_active);
         try {
             events_js_1.eventBroadcaster.broadcast('PRODUCT_UPDATED', {
                 product: updatedProduct,
@@ -616,7 +751,7 @@ exports.productsRouter.patch('/:id/status', auth_js_1.authenticateToken, auth_js
     }
 });
 // Admin: Soft-Archive Products (Move to Recycle Bin)
-const bulkArchiveProductsHandler = (req, res) => {
+const bulkArchiveProductsHandler = async (req, res) => {
     try {
         let { ids, all } = req.body || {};
         let targetIds = [];
@@ -651,6 +786,8 @@ const bulkArchiveProductsHandler = (req, res) => {
             catch { }
             throw txErr;
         }
+        // Sync to MongoDB Atlas
+        await syncArchiveProductToMongo(targetIds, true, false);
         // Broadcast live event for synchronization across all clients
         try {
             events_js_1.eventBroadcaster.broadcast('PRODUCT_DELETED', {
@@ -687,7 +824,7 @@ exports.productsRouter.delete('/all', auth_js_1.authenticateToken, auth_js_1.req
     bulkArchiveProductsHandler(req, res);
 });
 // Admin: Bulk Toggle Status (Publish / Unpublish)
-const bulkStatusProductsHandler = (req, res) => {
+const bulkStatusProductsHandler = async (req, res) => {
     try {
         const { ids, is_active } = req.body || {};
         if (!Array.isArray(ids) || ids.length === 0) {
@@ -716,6 +853,8 @@ const bulkStatusProductsHandler = (req, res) => {
             catch { }
             throw txErr;
         }
+        // Sync to MongoDB Atlas
+        await syncStatusToMongo(targetIds, !!is_active);
         try {
             events_js_1.eventBroadcaster.broadcast('PRODUCT_UPDATED', {
                 ids: targetIds,
@@ -737,20 +876,24 @@ const bulkStatusProductsHandler = (req, res) => {
 exports.productsRouter.post('/admin/bulk-status', auth_js_1.authenticateToken, auth_js_1.requireAdmin, bulkStatusProductsHandler);
 exports.productsRouter.post('/bulk-status', auth_js_1.authenticateToken, auth_js_1.requireAdmin, bulkStatusProductsHandler);
 // Admin: Soft-Archive Single Product (Move to Recycle Bin)
-const archiveProductHandler = (req, res) => {
+const archiveProductHandler = async (req, res) => {
     try {
-        const productId = req.params.id;
-        const existing = database_js_1.db.prepare('SELECT id, name, sku FROM products WHERE id = ?').get(productId);
+        const rawId = req.params.id;
+        const isNumericId = /^\d+$/.test(String(rawId));
+        let existing = database_js_1.db.prepare(isNumericId ? 'SELECT id, name, sku FROM products WHERE id = ?' : 'SELECT id, name, sku FROM products WHERE slug = ?').get(rawId);
         if (!existing) {
             res.status(404).json({ error: 'Product not found.' });
             return;
         }
+        const productId = existing.id;
         database_js_1.db.prepare(`
       UPDATE products 
       SET deleted_at = datetime('now'), is_active = 0, version = version + 1, updated_at = datetime('now') 
       WHERE id = ?
     `).run(productId);
         (0, database_js_1.recordAuditLog)(req.user?.email || 'admin@vktechnology.shop', 'ARCHIVE_PRODUCT', 'Product', productId, { name: existing.name, sku: existing.sku });
+        // Sync to MongoDB Atlas
+        await syncArchiveProductToMongo(Number(productId), true, false);
         try {
             events_js_1.eventBroadcaster.broadcast('PRODUCT_DELETED', { id: Number(productId), archived: true });
         }
@@ -772,14 +915,16 @@ exports.productsRouter.delete('/admin/:id', auth_js_1.authenticateToken, auth_js
 exports.productsRouter.post('/:id/archive', auth_js_1.authenticateToken, auth_js_1.requireAdmin, archiveProductHandler);
 exports.productsRouter.post('/admin/:id/archive', auth_js_1.authenticateToken, auth_js_1.requireAdmin, archiveProductHandler);
 // Admin: Restore Single Product from Recycle Bin
-const restoreProductHandler = (req, res) => {
+const restoreProductHandler = async (req, res) => {
     try {
-        const productId = req.params.id;
-        const existing = database_js_1.db.prepare('SELECT id, name, sku FROM products WHERE id = ?').get(productId);
+        const rawId = req.params.id;
+        const isNumericId = /^\d+$/.test(String(rawId));
+        let existing = database_js_1.db.prepare(isNumericId ? 'SELECT id, name, sku FROM products WHERE id = ?' : 'SELECT id, name, sku FROM products WHERE slug = ?').get(rawId);
         if (!existing) {
             res.status(404).json({ error: 'Product not found.' });
             return;
         }
+        const productId = existing.id;
         database_js_1.db.prepare(`
       UPDATE products 
       SET deleted_at = NULL, is_active = 1, version = version + 1, updated_at = datetime('now') 
@@ -787,6 +932,8 @@ const restoreProductHandler = (req, res) => {
     `).run(productId);
         (0, database_js_1.recordAuditLog)(req.user?.email || 'admin@vktechnology.shop', 'RESTORE_PRODUCT', 'Product', productId, { name: existing.name, sku: existing.sku });
         const fullProduct = fetchFullProduct(productId);
+        // Sync to MongoDB Atlas
+        await syncArchiveProductToMongo(Number(productId), false, true);
         try {
             events_js_1.eventBroadcaster.broadcast('PRODUCT_UPDATED', fullProduct);
         }
@@ -805,7 +952,7 @@ const restoreProductHandler = (req, res) => {
 exports.productsRouter.post('/:id/restore', auth_js_1.authenticateToken, auth_js_1.requireAdmin, restoreProductHandler);
 exports.productsRouter.post('/admin/:id/restore', auth_js_1.authenticateToken, auth_js_1.requireAdmin, restoreProductHandler);
 // Admin: Bulk Restore Products from Recycle Bin
-const bulkRestoreProductsHandler = (req, res) => {
+const bulkRestoreProductsHandler = async (req, res) => {
     try {
         let { ids, all } = req.body || {};
         let targetIds = [];
@@ -840,6 +987,8 @@ const bulkRestoreProductsHandler = (req, res) => {
             catch { }
             throw txErr;
         }
+        // Sync to MongoDB Atlas
+        await syncArchiveProductToMongo(targetIds, false, true);
         try {
             events_js_1.eventBroadcaster.broadcast('PRODUCT_UPDATED', { restoredIds: targetIds });
         }
@@ -863,7 +1012,7 @@ exports.productsRouter.get('/admin/recycle-bin', auth_js_1.authenticateToken, au
     handleAdminProductsList(req, res);
 });
 // Super Admin ONLY: Strictly Protected Permanent Deletion
-exports.productsRouter.post('/admin/permanent-delete', auth_js_1.authenticateToken, auth_js_1.requireSuperAdmin, (req, res) => {
+exports.productsRouter.post('/admin/permanent-delete', auth_js_1.authenticateToken, auth_js_1.requireSuperAdmin, async (req, res) => {
     try {
         const { ids, id, confirmPhrase } = req.body || {};
         // 1. Mandatory confirmation phrase check
@@ -930,6 +1079,8 @@ exports.productsRouter.post('/admin/permanent-delete', auth_js_1.authenticateTok
             catch { }
             throw txErr;
         }
+        // Sync permanent deletion to MongoDB Atlas
+        await syncPermanentDeleteToMongo(deletableIds);
         try {
             events_js_1.eventBroadcaster.broadcast('PRODUCT_PERMANENTLY_DELETED', { ids: deletableIds });
         }
