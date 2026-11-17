@@ -39,6 +39,33 @@ export const AdminProducts: React.FC = () => {
   const [selectedProductIds, setSelectedProductIds] = useState<number[]>([]);
   const [isBulkOperating, setIsBulkOperating] = useState(false);
 
+  // Non-blocking Toast Notification State
+  const [toast, setToast] = useState<{
+    id: number;
+    type: 'success' | 'error' | 'info';
+    message: string;
+    actionLabel?: string;
+    onAction?: () => void;
+  } | null>(null);
+
+  const showToast = (
+    message: string,
+    type: 'success' | 'error' | 'info' = 'success',
+    action?: { label: string; onAction: () => void }
+  ) => {
+    const id = Date.now();
+    setToast({
+      id,
+      type,
+      message,
+      actionLabel: action?.label,
+      onAction: action?.onAction
+    });
+    setTimeout(() => {
+      setToast(prev => (prev?.id === id ? null : prev));
+    }, 4500);
+  };
+
   // Modal State (Create / Edit)
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
@@ -246,7 +273,7 @@ export const AdminProducts: React.FC = () => {
       // Place newly uploaded image first as the primary product photo
       setImages(prev => [res.url, ...prev.filter(url => url !== res.url)]);
     } catch (err: any) {
-      alert(err.message || 'Image upload failed');
+      showToast(err.message || 'Image upload failed', 'error');
     } finally {
       setUploadingImage(false);
       e.target.value = '';
@@ -336,10 +363,22 @@ export const AdminProducts: React.FC = () => {
           setProducts(prev => prev.filter(p => p.id !== id));
           setRecycleBinProducts(prev => [{ ...target, is_active: false, deleted_at: new Date().toISOString() }, ...prev]);
         }
-        await api.products.archive(id);
+        const res = await api.products.archive(id);
         loadData(false);
+        showToast(
+          res.message || `Moved "${prodName}" to Recycle Bin.`,
+          'info',
+          {
+            label: 'Undo / Restore',
+            onAction: async () => {
+              await api.products.restore(id);
+              loadData(false);
+              showToast(`Restored "${prodName}" back to active catalog!`, 'success');
+            }
+          }
+        );
       } catch (err: any) {
-        alert(err.message || 'Failed to archive product');
+        showToast(err.message || 'Failed to archive product', 'error');
         loadData(false);
       }
     }
@@ -354,10 +393,11 @@ export const AdminProducts: React.FC = () => {
         setRecycleBinProducts(prev => prev.filter(p => p.id !== id));
         setProducts(prev => [{ ...target, is_active: true, deleted_at: null }, ...prev]);
       }
-      await api.products.restore(id);
+      const res = await api.products.restore(id);
       loadData(false);
+      showToast(res.message || `Restored "${prodName}" successfully.`, 'success');
     } catch (err: any) {
-      alert(err.message || 'Failed to restore product');
+      showToast(err.message || 'Failed to restore product', 'error');
       loadData(false);
     }
   };
@@ -368,8 +408,9 @@ export const AdminProducts: React.FC = () => {
       setProducts(prev => prev.map(p => p.id === id ? { ...p, is_active: nextStatus } : p));
       await api.products.toggleStatus(id, nextStatus);
       loadData(false);
+      showToast(`Product ${nextStatus ? 'published' : 'unpublished'} successfully.`, 'success');
     } catch (e: any) {
-      alert(e.message || 'Status toggle failed');
+      showToast(e.message || 'Status toggle failed', 'error');
       loadData(false);
     }
   };
@@ -380,8 +421,9 @@ export const AdminProducts: React.FC = () => {
       setProducts(prev => prev.map(p => p.id === id ? { ...p, stock_quantity: val } : p));
       await api.products.updateStock(id, val);
       loadData(false);
+      showToast(`Stock updated to ${val}.`, 'success');
     } catch (e: any) {
-      alert(e.message || 'Stock update failed');
+      showToast(e.message || 'Stock update failed', 'error');
       loadData(false);
     }
   };
@@ -413,7 +455,8 @@ export const AdminProducts: React.FC = () => {
   // Bulk Safe Archive (Active Tab)
   const handleBulkArchive = async () => {
     if (selectedProductIds.length === 0) return;
-    const confirmPrompt = `Move ${selectedProductIds.length} selected products to the Recycle Bin?\n\nThey will be safely archived and unpublished from the public storefront.`;
+    const count = selectedProductIds.length;
+    const confirmPrompt = `Move ${count} selected product${count > 1 ? 's' : ''} to the Recycle Bin?\n\nThey will be safely archived and unpublished from the public storefront.`;
 
     if (window.confirm(confirmPrompt)) {
       try {
@@ -428,9 +471,20 @@ export const AdminProducts: React.FC = () => {
         setSelectedProductIds([]);
         const res = await api.products.bulkArchive(idsToArchive);
         loadData(false);
-        alert(res.message);
+        showToast(
+          res.message || `Archived ${count} product(s) to Recycle Bin.`,
+          'info',
+          {
+            label: 'Undo / Restore All',
+            onAction: async () => {
+              await api.products.bulkRestore(idsToArchive);
+              loadData(false);
+              showToast(`Restored ${count} product(s) back to active catalog!`, 'success');
+            }
+          }
+        );
       } catch (err: any) {
-        alert(err.message || 'Failed to archive selected products.');
+        showToast(err.message || 'Failed to archive selected products.', 'error');
         loadData(false);
       } finally {
         setIsBulkOperating(false);
@@ -441,6 +495,7 @@ export const AdminProducts: React.FC = () => {
   // Bulk Restore (Recycle Bin Tab)
   const handleBulkRestore = async () => {
     if (selectedProductIds.length === 0) return;
+    const count = selectedProductIds.length;
     try {
       setIsBulkOperating(true);
       const idsToRestore = [...selectedProductIds];
@@ -453,9 +508,9 @@ export const AdminProducts: React.FC = () => {
       setSelectedProductIds([]);
       const res = await api.products.bulkRestore(idsToRestore);
       loadData(false);
-      alert(res.message);
+      showToast(res.message || `Restored ${count} product(s) to active catalog!`, 'success');
     } catch (err: any) {
-      alert(err.message || 'Failed to restore selected products.');
+      showToast(err.message || 'Failed to restore selected products.', 'error');
       loadData(false);
     } finally {
       setIsBulkOperating(false);
@@ -490,7 +545,7 @@ export const AdminProducts: React.FC = () => {
       setIsPermanentModalOpen(false);
       setSelectedProductIds([]);
       loadData(false);
-      alert(res.message);
+      showToast(res.message, 'success');
     } catch (err: any) {
       setPermError(err.message || 'Permanent deletion failed.');
       loadData(false);
@@ -508,7 +563,7 @@ export const AdminProducts: React.FC = () => {
       setRecoveryAudit(report);
       setIsRecoveryModalOpen(true);
     } catch (err: any) {
-      alert(err.message || 'Failed to audit catalog');
+      showToast(err.message || 'Failed to audit catalog', 'error');
     } finally {
       setIsAuditing(false);
     }
@@ -525,8 +580,9 @@ export const AdminProducts: React.FC = () => {
       await loadData();
       const updatedAudit = await api.products.recoverCatalog({ dryRun: true });
       setRecoveryAudit(updatedAudit);
+      showToast(res.message, 'success');
     } catch (err: any) {
-      alert(err.message || 'Recovery execution failed.');
+      showToast(err.message || 'Recovery execution failed.', 'error');
     } finally {
       setIsRecovering(false);
     }
@@ -540,9 +596,9 @@ export const AdminProducts: React.FC = () => {
       setProducts(prev => prev.map(p => ids.includes(p.id) ? { ...p, is_active: publish } : p));
       const res = await api.products.bulkToggleStatus(ids, publish);
       loadData(false);
-      alert(res.message);
+      showToast(res.message, 'success');
     } catch (err: any) {
-      alert(err.message || 'Failed to update selected products.');
+      showToast(err.message || 'Failed to update selected products.', 'error');
       loadData(false);
     } finally {
       setIsBulkOperating(false);
@@ -1409,6 +1465,32 @@ export const AdminProducts: React.FC = () => {
               </div>
             </div>
           </div>
+        </div>
+      )}
+      {/* Non-blocking Floating Notification Toast */}
+      {toast && (
+        <div className="fixed bottom-6 right-6 z-50 flex items-center space-x-3 px-4 py-3 rounded-xl shadow-2xl border text-sm animate-in fade-in slide-in-from-bottom-3 duration-200 transition-all bg-gray-900 text-white border-gray-700">
+          {toast.type === 'success' && <CheckCircle2 size={18} className="text-emerald-400 shrink-0" />}
+          {toast.type === 'error' && <AlertCircle size={18} className="text-rose-400 shrink-0" />}
+          {toast.type === 'info' && <Archive size={18} className="text-amber-400 shrink-0" />}
+          <span className="font-medium text-xs sm:text-sm">{toast.message}</span>
+          {toast.actionLabel && toast.onAction && (
+            <button
+              onClick={() => {
+                toast.onAction?.();
+                setToast(null);
+              }}
+              className="ml-2 bg-amber-400 hover:bg-amber-300 text-gray-950 font-bold px-2.5 py-1 rounded text-xs transition"
+            >
+              {toast.actionLabel}
+            </button>
+          )}
+          <button
+            onClick={() => setToast(null)}
+            className="text-gray-400 hover:text-white ml-2 p-1 rounded-md"
+          >
+            <X size={14} />
+          </button>
         </div>
       )}
     </div>
