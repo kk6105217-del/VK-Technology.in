@@ -22,17 +22,48 @@ import { upiRouter } from './routes/upi.js';
 import { projectsRouter } from './routes/projects.js';
 import { appsRouter } from './routes/apps.js';
 import { analyticsRouter } from './routes/analytics.js';
+import { databaseRouter } from './routes/database.js';
+import { bulkOrdersRouter } from './routes/bulkOrders.js';
+import { customersRouter } from './routes/customers.js';
+import { staffRouter } from './routes/staff.js';
+import { inventoryRouter } from './routes/inventory.js';
 import { eventBroadcaster } from './services/events.js';
 import { openApiSpec } from './openapi.js';
+import { connectToDatabase, isMongoConnected } from './config/database.js';
+import { securityHeaders, apiRateLimiter } from './middleware/rateLimiter.js';
+import { sanitizeNoSqlInput } from './middleware/validate.js';
+import { errorHandler } from './middleware/errorHandler.js';
+import { runMigrationToMongo } from './migrations/migrateFromSqlite.js';
 
 const app = express();
 
-// Initialize database & seed defaults safely
+// Security Headers (Helmet) & Rate Limiting
+app.use(securityHeaders);
+app.use(apiRateLimiter);
+
+// Initialize databases & seed defaults safely
 try {
   initDatabase();
 } catch (err) {
-  console.warn('Database initialization warning:', err);
+  console.warn('SQLite database initialization warning:', err);
 }
+
+// Initialize MongoDB Atlas connection asynchronously
+connectToDatabase()
+  .then(async (m) => {
+    if (m && isMongoConnected()) {
+      console.log('[MongoDB Atlas] Central Database connection verified.');
+      // Auto-run idempotent migration to ensure all products & admins exist in Mongo
+      try {
+        await runMigrationToMongo();
+      } catch (migErr: any) {
+        console.warn('[MongoDB Atlas] Auto-migration warning:', migErr.message);
+      }
+    }
+  })
+  .catch((err) => {
+    console.warn('[MongoDB Atlas] Deferred connection note:', err.message);
+  });
 
 // CORS configuration
 app.use(cors({
@@ -43,6 +74,9 @@ app.use(cors({
 // Body parser
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// NoSQL Operator Injection Sanitization
+app.use(sanitizeNoSqlInput);
 
 // Static uploads directory (safe for serverless read-only filesystems)
 const uploadsDir = (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME)
@@ -80,6 +114,11 @@ const routeBindings = [
   ['/projects', projectsRouter],
   ['/apps', appsRouter],
   ['/analytics', analyticsRouter],
+  ['/database', databaseRouter],
+  ['/bulk-orders', bulkOrdersRouter],
+  ['/customers', customersRouter],
+  ['/staff', staffRouter],
+  ['/inventory', inventoryRouter],
 ] as const;
 
 routeBindings.forEach(([prefix, router]) => {
@@ -99,6 +138,17 @@ app.use('/api/admin/products', productsRouter);
 app.use('/api/admin/projects', projectsRouter);
 app.use('/api/admin/apps', appsRouter);
 app.use('/api/admin/analytics', analyticsRouter);
+app.use('/api/admin/customers', customersRouter);
+app.use('/api/admin/staff', staffRouter);
+app.use('/api/admin/inventory', inventoryRouter);
+app.use('/api/admin/dashboard', (req, res, next) => {
+  req.url = '/admin/stats';
+  settingsRouter(req, res, next);
+});
+app.use('/api/admin/logs', (req, res, next) => {
+  req.url = '/audit-logs';
+  databaseRouter(req, res, next);
+});
 
 // Health check endpoint on both /api/health and /health
 const healthHandler = (_req: express.Request, res: express.Response) => {
@@ -250,13 +300,8 @@ app.get('/api/internal/backend-health', async (req, res) => {
   }
 });
 
-// Global error handler
-app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
-  console.error('Unhandled server error:', err);
-  res.status(err.status || 500).json({
-    error: err.message || 'Internal Server Error'
-  });
-});
+// Global production error handler (stack traces hidden in production)
+app.use(errorHandler);
 
 if (
   !process.env.VERCEL &&

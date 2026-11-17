@@ -52,6 +52,13 @@ import { AdminUpiPayments } from './pages/admin/AdminUpiPayments';
 import { AdminAnalytics } from './pages/admin/AdminAnalytics';
 import { AdminProjects } from './pages/admin/AdminProjects';
 import { AdminApps } from './pages/admin/AdminApps';
+import { AdminCustomers } from './pages/admin/AdminCustomers';
+import { AdminInvoices } from './pages/admin/AdminInvoices';
+import { AdminBulkOrders } from './pages/admin/AdminBulkOrders';
+import { AdminStaff } from './pages/admin/AdminStaff';
+import { AdminSecurity } from './pages/admin/AdminSecurity';
+import { AdminAuditLogs } from './pages/admin/AdminAuditLogs';
+import { AdminDatabase } from './pages/admin/AdminDatabase';
 import { AdminNotFoundPage } from './pages/admin/AdminNotFoundPage';
 
 import { Cpu, Search, Home, HelpCircle } from 'lucide-react';
@@ -150,6 +157,13 @@ export function App() {
                   <Route path="banners" element={<AdminBanners />} />
                   <Route path="reviews" element={<AdminReviews />} />
                   <Route path="reports" element={<AdminReports />} />
+                  <Route path="customers" element={<AdminCustomers />} />
+                  <Route path="invoices" element={<AdminInvoices />} />
+                  <Route path="bulk-orders" element={<AdminBulkOrders />} />
+                  <Route path="staff" element={<AdminStaff />} />
+                  <Route path="security" element={<AdminSecurity />} />
+                  <Route path="audit-logs" element={<AdminAuditLogs />} />
+                  <Route path="database" element={<AdminDatabase />} />
                   <Route path="settings" element={<AdminSettings />} />
                   <Route path="*" element={<AdminNotFoundPage />} />
                 </Route>

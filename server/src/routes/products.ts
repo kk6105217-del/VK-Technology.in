@@ -1,13 +1,13 @@
 import { Router, Response } from 'express';
-import { db, recordAuditLog } from '../database.js';
-import { authenticateToken, requireAdmin, AuthenticatedRequest } from '../middleware/auth.js';
+import { db, recordAuditLog, getCanonicalProductsList } from '../database.js';
+import { authenticateToken, requireAdmin, requireSuperAdmin, AuthenticatedRequest } from '../middleware/auth.js';
 import { eventBroadcaster } from '../services/events.js';
 import { setDynamicCacheControl, setPrivateCacheControl } from '../utils/cache.js';
 
 export const productsRouter = Router();
 
 // Helper to fetch full populated product record
-function fetchFullProduct(idOrSlug: number | string): any {
+function fetchFullProduct(idOrSlug: number | string, allowArchived: boolean = false): any {
   const isId = /^\d+$/.test(String(idOrSlug));
   const sql = `
     SELECT 
@@ -26,6 +26,7 @@ function fetchFullProduct(idOrSlug: number | string): any {
   `;
   const prod = db.prepare(sql).get(idOrSlug) as any;
   if (!prod) return null;
+  if (!allowArchived && prod.deleted_at) return null;
 
   try { prod.specifications = JSON.parse(prod.specifications_json || '{}'); } catch { prod.specifications = {}; }
   try { prod.features = JSON.parse(prod.features_json || '[]'); } catch { prod.features = []; }
@@ -71,10 +72,15 @@ export function handleAdminProductsList(req: AuthenticatedRequest, res: Response
       params.push(category);
     }
 
-    if (status === 'active') conditions.push('p.is_active = 1');
-    if (status === 'inactive') conditions.push('p.is_active = 0');
-    if (status === 'low_stock') conditions.push('p.stock_quantity <= 5 AND p.stock_quantity > 0');
-    if (status === 'out_of_stock') conditions.push('p.stock_quantity = 0');
+    if (status === 'archived' || status === 'recycle_bin') {
+      conditions.push('p.deleted_at IS NOT NULL');
+    } else {
+      conditions.push('p.deleted_at IS NULL');
+      if (status === 'active') conditions.push('p.is_active = 1');
+      if (status === 'inactive') conditions.push('p.is_active = 0');
+      if (status === 'low_stock') conditions.push('p.stock_quantity <= 5 AND p.stock_quantity > 0');
+      if (status === 'out_of_stock') conditions.push('p.stock_quantity = 0');
+    }
 
     const sql = `
       SELECT 
@@ -128,7 +134,7 @@ productsRouter.get('/', (req, res) => {
       limit = 24
     } = req.query;
 
-    let conditions: string[] = ['p.is_active = 1'];
+    let conditions: string[] = ['p.is_active = 1', 'p.deleted_at IS NULL'];
     let params: any[] = [];
 
     // Search query
@@ -767,61 +773,42 @@ productsRouter.patch('/:id/status', authenticateToken, requireAdmin, (req: Authe
   }
 });
 
-// Admin: Bulk Delete Products or Delete All
-const bulkDeleteProductsHandler = (req: AuthenticatedRequest, res: Response) => {
+// Admin: Soft-Archive Products (Move to Recycle Bin)
+const bulkArchiveProductsHandler = (req: AuthenticatedRequest, res: Response) => {
   try {
     let { ids, all } = req.body || {};
 
     let targetIds: number[] = [];
     if (all === true) {
-      const allRows = db.prepare('SELECT id FROM products').all() as Array<{ id: number }>;
+      const allRows = db.prepare('SELECT id FROM products WHERE deleted_at IS NULL').all() as Array<{ id: number }>;
       targetIds = allRows.map(r => r.id);
     } else if (Array.isArray(ids)) {
       targetIds = ids.map(id => Number(id)).filter(id => !isNaN(id) && id > 0);
     }
 
     if (targetIds.length === 0) {
-      res.status(400).json({ error: 'No product IDs provided for deletion.' });
+      res.status(400).json({ error: 'No active products selected for archiving.' });
       return;
     }
 
-    let deletedCount = 0;
-    let archivedCount = 0;
-    const deletedIds: number[] = [];
-    const archivedIds: number[] = [];
-
     db.exec('BEGIN TRANSACTION');
     try {
+      const stmt = db.prepare(`
+        UPDATE products 
+        SET deleted_at = datetime('now'), is_active = 0, version = version + 1, updated_at = datetime('now') 
+        WHERE id = ?
+      `);
+
       for (const prodId of targetIds) {
-        // Safety rule: Never delete product if existing orders reference it
-        const orderRef = db.prepare('SELECT COUNT(*) as count FROM order_items WHERE product_id = ?').get(prodId) as any;
-        if (orderRef && orderRef.count > 0) {
-          // Soft-delete: unpublish product to preserve customer order history
-          db.prepare(`
-            UPDATE products 
-            SET is_active = 0, version = version + 1, updated_at = datetime('now') 
-            WHERE id = ?
-          `).run(prodId);
-          archivedCount++;
-          archivedIds.push(prodId);
-        } else {
-          // Hard delete cascade
-          db.prepare('DELETE FROM product_images WHERE product_id = ?').run(prodId);
-          db.prepare('DELETE FROM cart_items WHERE product_id = ?').run(prodId);
-          db.prepare('DELETE FROM wishlists WHERE product_id = ?').run(prodId);
-          db.prepare('DELETE FROM reviews WHERE product_id = ?').run(prodId);
-          db.prepare('DELETE FROM products WHERE id = ?').run(prodId);
-          deletedCount++;
-          deletedIds.push(prodId);
-        }
+        stmt.run(prodId);
       }
 
       recordAuditLog(
         req.user?.email || 'admin@vktechnology.shop',
-        'BULK_DELETE_PRODUCTS',
+        'BULK_ARCHIVE_PRODUCTS',
         'Products',
         targetIds.join(','),
-        { deletedCount, archivedCount, deletedIds, archivedIds }
+        { archivedCount: targetIds.length, targetIds }
       );
 
       db.exec('COMMIT');
@@ -834,33 +821,36 @@ const bulkDeleteProductsHandler = (req: AuthenticatedRequest, res: Response) => 
     try {
       eventBroadcaster.broadcast('PRODUCT_DELETED', { 
         count: targetIds.length, 
-        deletedIds, 
-        archivedIds 
+        archivedIds: targetIds,
+        archived: true
       });
     } catch {}
 
     res.json({
-      message: `Processed ${targetIds.length} products: ${deletedCount} deleted permanently, ${archivedCount} safely archived (preserved in existing customer orders).`,
-      deletedCount,
-      archivedCount,
+      message: `Successfully archived ${targetIds.length} products to the Recycle Bin. Products remain safely preserved.`,
+      archivedCount: targetIds.length,
+      deletedCount: 0,
       totalProcessed: targetIds.length,
       timestamp: new Date().toISOString()
     });
   } catch (error: any) {
-    console.error('Bulk delete products error:', error);
-    res.status(500).json({ error: error.message || 'Failed to bulk delete products.' });
+    console.error('Bulk archive products error:', error);
+    res.status(500).json({ error: error.message || 'Failed to archive products.' });
   }
 };
 
-productsRouter.post('/admin/bulk-delete', authenticateToken, requireAdmin, bulkDeleteProductsHandler);
-productsRouter.post('/bulk-delete', authenticateToken, requireAdmin, bulkDeleteProductsHandler);
+// Aliases for bulk archiving (guarantees safe non-destructive soft-archive across all calls)
+productsRouter.post('/admin/bulk-archive', authenticateToken, requireAdmin, bulkArchiveProductsHandler);
+productsRouter.post('/bulk-archive', authenticateToken, requireAdmin, bulkArchiveProductsHandler);
+productsRouter.post('/admin/bulk-delete', authenticateToken, requireAdmin, bulkArchiveProductsHandler);
+productsRouter.post('/bulk-delete', authenticateToken, requireAdmin, bulkArchiveProductsHandler);
 productsRouter.delete('/admin/all', authenticateToken, requireAdmin, (req: AuthenticatedRequest, res: Response) => {
   req.body = { all: true };
-  bulkDeleteProductsHandler(req, res);
+  bulkArchiveProductsHandler(req, res);
 });
 productsRouter.delete('/all', authenticateToken, requireAdmin, (req: AuthenticatedRequest, res: Response) => {
   req.body = { all: true };
-  bulkDeleteProductsHandler(req, res);
+  bulkArchiveProductsHandler(req, res);
 });
 
 // Admin: Bulk Toggle Status (Publish / Unpublish)
@@ -920,55 +910,131 @@ const bulkStatusProductsHandler = (req: AuthenticatedRequest, res: Response) => 
 productsRouter.post('/admin/bulk-status', authenticateToken, requireAdmin, bulkStatusProductsHandler);
 productsRouter.post('/bulk-status', authenticateToken, requireAdmin, bulkStatusProductsHandler);
 
-// Admin: Delete product (with foreign key protection for orders)
-productsRouter.delete('/:id', authenticateToken, requireAdmin, (req: AuthenticatedRequest, res: Response) => {
+// Admin: Soft-Archive Single Product (Move to Recycle Bin)
+const archiveProductHandler = (req: AuthenticatedRequest, res: Response) => {
   try {
     const productId = req.params.id;
-
-    // Safety rule: Never delete product if existing orders reference it
-    const orderRef = db.prepare('SELECT COUNT(*) as count FROM order_items WHERE product_id = ?').get(productId) as any;
-    if (orderRef && orderRef.count > 0) {
-      // Soft-delete: unpublish product to preserve customer order history
-      db.prepare(`
-        UPDATE products 
-        SET is_active = 0, version = version + 1, updated_at = datetime('now') 
-        WHERE id = ?
-      `).run(productId);
-
-      recordAuditLog(
-        req.user?.email || 'admin@vktechnology.shop',
-        'ARCHIVE_PRODUCT_IN_ORDERS',
-        'Product',
-        productId,
-        { reason: 'Product referenced in existing order history, unpublished safely' }
-      );
-
-      try {
-        eventBroadcaster.broadcast('PRODUCT_DELETED', { id: Number(productId) });
-      } catch {}
-
-      res.json({
-        message: 'Product is referenced in customer orders. It has been safely archived and unpublished from the public storefront.',
-        productId: Number(productId),
-        timestamp: new Date().toISOString()
-      });
+    const existing = db.prepare('SELECT id, name, sku FROM products WHERE id = ?').get(productId) as any;
+    if (!existing) {
+      res.status(404).json({ error: 'Product not found.' });
       return;
     }
 
-    // Atomic transaction for complete cascade removal
+    db.prepare(`
+      UPDATE products 
+      SET deleted_at = datetime('now'), is_active = 0, version = version + 1, updated_at = datetime('now') 
+      WHERE id = ?
+    `).run(productId);
+
+    recordAuditLog(
+      req.user?.email || 'admin@vktechnology.shop',
+      'ARCHIVE_PRODUCT',
+      'Product',
+      productId,
+      { name: existing.name, sku: existing.sku }
+    );
+
+    try {
+      eventBroadcaster.broadcast('PRODUCT_DELETED', { id: Number(productId), archived: true });
+    } catch {}
+
+    res.json({
+      message: `Product "${existing.name}" has been safely archived to the Recycle Bin.`,
+      productId: Number(productId),
+      archived: true,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    console.error('Archive product error:', error);
+    res.status(500).json({ error: error.message || 'Failed to archive product.' });
+  }
+};
+
+productsRouter.delete('/:id', authenticateToken, requireAdmin, archiveProductHandler);
+productsRouter.delete('/admin/:id', authenticateToken, requireAdmin, archiveProductHandler);
+productsRouter.post('/:id/archive', authenticateToken, requireAdmin, archiveProductHandler);
+productsRouter.post('/admin/:id/archive', authenticateToken, requireAdmin, archiveProductHandler);
+
+// Admin: Restore Single Product from Recycle Bin
+const restoreProductHandler = (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const productId = req.params.id;
+    const existing = db.prepare('SELECT id, name, sku FROM products WHERE id = ?').get(productId) as any;
+    if (!existing) {
+      res.status(404).json({ error: 'Product not found.' });
+      return;
+    }
+
+    db.prepare(`
+      UPDATE products 
+      SET deleted_at = NULL, is_active = 1, version = version + 1, updated_at = datetime('now') 
+      WHERE id = ?
+    `).run(productId);
+
+    recordAuditLog(
+      req.user?.email || 'admin@vktechnology.shop',
+      'RESTORE_PRODUCT',
+      'Product',
+      productId,
+      { name: existing.name, sku: existing.sku }
+    );
+
+    const fullProduct = fetchFullProduct(productId);
+
+    try {
+      eventBroadcaster.broadcast('PRODUCT_UPDATED', fullProduct);
+    } catch {}
+
+    res.json({
+      message: `Product "${existing.name}" restored successfully.`,
+      product: fullProduct,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    console.error('Restore product error:', error);
+    res.status(500).json({ error: error.message || 'Failed to restore product.' });
+  }
+};
+
+productsRouter.post('/:id/restore', authenticateToken, requireAdmin, restoreProductHandler);
+productsRouter.post('/admin/:id/restore', authenticateToken, requireAdmin, restoreProductHandler);
+
+// Admin: Bulk Restore Products from Recycle Bin
+const bulkRestoreProductsHandler = (req: AuthenticatedRequest, res: Response) => {
+  try {
+    let { ids, all } = req.body || {};
+
+    let targetIds: number[] = [];
+    if (all === true) {
+      const allRows = db.prepare('SELECT id FROM products WHERE deleted_at IS NOT NULL').all() as Array<{ id: number }>;
+      targetIds = allRows.map(r => r.id);
+    } else if (Array.isArray(ids)) {
+      targetIds = ids.map(id => Number(id)).filter(id => !isNaN(id) && id > 0);
+    }
+
+    if (targetIds.length === 0) {
+      res.status(400).json({ error: 'No archived products selected for restoration.' });
+      return;
+    }
+
     db.exec('BEGIN TRANSACTION');
     try {
-      db.prepare('DELETE FROM product_images WHERE product_id = ?').run(productId);
-      db.prepare('DELETE FROM cart_items WHERE product_id = ?').run(productId);
-      db.prepare('DELETE FROM wishlists WHERE product_id = ?').run(productId);
-      db.prepare('DELETE FROM reviews WHERE product_id = ?').run(productId);
-      db.prepare('DELETE FROM products WHERE id = ?').run(productId);
+      const stmt = db.prepare(`
+        UPDATE products 
+        SET deleted_at = NULL, is_active = 1, version = version + 1, updated_at = datetime('now') 
+        WHERE id = ?
+      `);
+
+      for (const prodId of targetIds) {
+        stmt.run(prodId);
+      }
 
       recordAuditLog(
         req.user?.email || 'admin@vktechnology.shop',
-        'DELETE_PRODUCT',
-        'Product',
-        productId
+        'BULK_RESTORE_PRODUCTS',
+        'Products',
+        targetIds.join(','),
+        { restoredCount: targetIds.length, restoredIds: targetIds }
       );
 
       db.exec('COMMIT');
@@ -978,16 +1044,261 @@ productsRouter.delete('/:id', authenticateToken, requireAdmin, (req: Authenticat
     }
 
     try {
-      eventBroadcaster.broadcast('PRODUCT_DELETED', { id: Number(productId) });
+      eventBroadcaster.broadcast('PRODUCT_UPDATED', { restoredIds: targetIds });
     } catch {}
 
     res.json({
-      message: 'Product deleted successfully.',
-      productId: Number(productId),
+      message: `Successfully restored ${targetIds.length} products to the active catalog.`,
+      restoredCount: targetIds.length,
       timestamp: new Date().toISOString()
     });
   } catch (error: any) {
-    console.error('Delete product error:', error);
-    res.status(500).json({ error: error.message || 'Failed to delete product.' });
+    console.error('Bulk restore products error:', error);
+    res.status(500).json({ error: error.message || 'Failed to bulk restore products.' });
+  }
+};
+
+productsRouter.post('/admin/bulk-restore', authenticateToken, requireAdmin, bulkRestoreProductsHandler);
+productsRouter.post('/bulk-restore', authenticateToken, requireAdmin, bulkRestoreProductsHandler);
+
+// Admin: Dedicated Recycle Bin Endpoint
+productsRouter.get('/admin/recycle-bin', authenticateToken, requireAdmin, (req: AuthenticatedRequest, res: Response) => {
+  req.query.status = 'recycle_bin';
+  handleAdminProductsList(req, res);
+});
+
+// Super Admin ONLY: Strictly Protected Permanent Deletion
+productsRouter.post('/admin/permanent-delete', authenticateToken, requireSuperAdmin, (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { ids, id, confirmPhrase } = req.body || {};
+
+    // 1. Mandatory confirmation phrase check
+    if (confirmPhrase !== 'DELETE PERMANENTLY') {
+      res.status(400).json({
+        error: 'Confirmation phrase mismatch. You must explicitly type "DELETE PERMANENTLY" to permanently delete products.'
+      });
+      return;
+    }
+
+    let targetIds: number[] = [];
+    if (id !== undefined && id !== null) {
+      targetIds = [Number(id)];
+    } else if (Array.isArray(ids)) {
+      targetIds = ids.map(x => Number(x)).filter(x => !isNaN(x) && x > 0);
+    }
+
+    if (targetIds.length === 0) {
+      res.status(400).json({ error: 'No valid product IDs provided for permanent deletion.' });
+      return;
+    }
+
+    // 2. Safety Rule: Check if products are referenced in past customer orders
+    const blockedByOrders: Array<{ id: number; name: string; sku: string; orderCount: number }> = [];
+    const deletableIds: number[] = [];
+
+    for (const prodId of targetIds) {
+      const orderRef = db.prepare('SELECT COUNT(*) as count FROM order_items WHERE product_id = ?').get(prodId) as any;
+      const orderCount = Number(orderRef?.count || 0);
+
+      if (orderCount > 0) {
+        const prod = db.prepare('SELECT id, name, sku FROM products WHERE id = ?').get(prodId) as any;
+        blockedByOrders.push({
+          id: prodId,
+          name: prod?.name || `Product #${prodId}`,
+          sku: prod?.sku || 'UNKNOWN',
+          orderCount
+        });
+      } else {
+        deletableIds.push(prodId);
+      }
+    }
+
+    if (deletableIds.length === 0) {
+      res.status(400).json({
+        error: `Cannot permanently delete product(s). All ${blockedByOrders.length} selected product(s) are referenced in existing customer orders. They must remain safely archived in the Recycle Bin to preserve order history.`,
+        blockedByOrders
+      });
+      return;
+    }
+
+    // Atomic cascade deletion only for unreferenced products
+    db.exec('BEGIN TRANSACTION');
+    try {
+      for (const prodId of deletableIds) {
+        db.prepare('DELETE FROM product_images WHERE product_id = ?').run(prodId);
+        db.prepare('DELETE FROM cart_items WHERE product_id = ?').run(prodId);
+        db.prepare('DELETE FROM wishlists WHERE product_id = ?').run(prodId);
+        db.prepare('DELETE FROM reviews WHERE product_id = ?').run(prodId);
+        db.prepare('DELETE FROM products WHERE id = ?').run(prodId);
+      }
+
+      recordAuditLog(
+        req.user?.email || 'admin@vktechnology.shop',
+        'PERMANENT_DELETE_PRODUCTS',
+        'Products',
+        deletableIds.join(','),
+        { deletedCount: deletableIds.length, deletableIds, blockedCount: blockedByOrders.length, blockedByOrders }
+      );
+
+      db.exec('COMMIT');
+    } catch (txErr) {
+      try { db.exec('ROLLBACK'); } catch {}
+      throw txErr;
+    }
+
+    try {
+      eventBroadcaster.broadcast('PRODUCT_PERMANENTLY_DELETED', { ids: deletableIds });
+    } catch {}
+
+    let message = `Permanently deleted ${deletableIds.length} product(s).`;
+    if (blockedByOrders.length > 0) {
+      message += ` Note: ${blockedByOrders.length} product(s) were protected and retained because they are referenced in customer orders.`;
+    }
+
+    res.json({
+      message,
+      deletedCount: deletableIds.length,
+      deletedIds: deletableIds,
+      blockedCount: blockedByOrders.length,
+      blockedByOrders,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    console.error('Permanent delete products error:', error);
+    res.status(500).json({ error: error.message || 'Failed to permanently delete products.' });
+  }
+});
+
+// Admin: Selective Recovery and Inspection for Missing Catalog Products
+productsRouter.post('/admin/recover-missing', authenticateToken, requireAdmin, (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const { dryRun = true, execute = false } = req.body || {};
+
+    const canonicalProducts = getCanonicalProductsList();
+    const statusReport: any[] = [];
+    let missingCount = 0;
+    let archivedCount = 0;
+    let activeCount = 0;
+
+    for (const cp of canonicalProducts) {
+      const existing = db.prepare('SELECT id, name, sku, is_active, deleted_at FROM products WHERE sku = ?').get(cp.sku) as any;
+      if (!existing) {
+        missingCount++;
+        statusReport.push({ sku: cp.sku, name: cp.name, status: 'MISSING', action: 'CAN_REINSERT' });
+      } else if (existing.deleted_at) {
+        archivedCount++;
+        statusReport.push({ sku: cp.sku, name: cp.name, id: existing.id, status: 'ARCHIVED', action: 'CAN_RESTORE' });
+      } else {
+        activeCount++;
+        statusReport.push({ sku: cp.sku, name: cp.name, id: existing.id, status: 'ACTIVE', action: 'NONE_NEEDED' });
+      }
+    }
+
+    if (dryRun && !execute) {
+      res.json({
+        mode: 'DRY_RUN',
+        message: `Catalog Audit: ${canonicalProducts.length} canonical products checked. ${missingCount} missing, ${archivedCount} in Recycle Bin, ${activeCount} currently active.`,
+        totalCanonical: canonicalProducts.length,
+        missingCount,
+        archivedCount,
+        activeCount,
+        details: statusReport
+      });
+      return;
+    }
+
+    // Execution Mode: Selective re-insertion & restoration (Owner approved)
+    let restoredCount = 0;
+    let insertedCount = 0;
+
+    db.exec('BEGIN TRANSACTION');
+    try {
+      for (const cp of canonicalProducts) {
+        const existing = db.prepare('SELECT id, deleted_at FROM products WHERE sku = ?').get(cp.sku) as any;
+        if (!existing) {
+          const insertStmt = db.prepare(`
+            INSERT INTO products (
+              name, slug, sku, category_id, subcategory, short_description, description,
+              regular_price, discounted_price, stock_quantity, brand, specifications_json,
+              features_json, compatibility, package_contents_json, shipping_weight_grams,
+              estimated_dispatch_days, warranty_info, is_featured, is_active, version, created_at, updated_at
+            ) VALUES (
+              ?, ?, ?, ?, ?, ?, ?,
+              ?, ?, ?, ?, ?,
+              ?, ?, ?, ?,
+              ?, ?, ?, 1, 1, datetime('now'), datetime('now')
+            )
+          `).run(
+            cp.name,
+            cp.slug,
+            cp.sku,
+            cp.category_id,
+            cp.subcategory || null,
+            cp.short_description || null,
+            cp.description,
+            cp.regular_price,
+            cp.discounted_price || null,
+            cp.stock_quantity,
+            cp.brand || 'VK Technology',
+            JSON.stringify(cp.specifications || {}),
+            JSON.stringify(cp.features || []),
+            (cp as any).compatibility || null,
+            JSON.stringify((cp as any).package_contents || []),
+            cp.shipping_weight_grams || 250,
+            cp.estimated_dispatch_days || 1,
+            (cp as any).warranty_info || '6 Months Warranty',
+            cp.is_featured ? 1 : 0
+          );
+
+          const newId = Number(insertStmt.lastInsertRowid);
+          if (Array.isArray(cp.images) && cp.images.length > 0) {
+            const imgInsert = db.prepare(`
+              INSERT INTO product_images (product_id, image_url, alt_text, sort_order, is_primary)
+              VALUES (?, ?, ?, ?, ?)
+            `);
+            cp.images.forEach((url: string, idx: number) => {
+              imgInsert.run(newId, url, cp.name, idx, idx === 0 ? 1 : 0);
+            });
+          }
+          insertedCount++;
+        } else if (existing.deleted_at) {
+          db.prepare(`
+            UPDATE products 
+            SET deleted_at = NULL, is_active = 1, version = version + 1, updated_at = datetime('now') 
+            WHERE id = ?
+          `).run(existing.id);
+          restoredCount++;
+        }
+      }
+
+      recordAuditLog(
+        req.user?.email || 'admin@vktechnology.shop',
+        'SELECTIVE_CATALOG_RECOVERY',
+        'Products',
+        'ALL',
+        { restoredCount, insertedCount }
+      );
+
+      db.exec('COMMIT');
+    } catch (txErr) {
+      try { db.exec('ROLLBACK'); } catch {}
+      throw txErr;
+    }
+
+    try {
+      eventBroadcaster.broadcast('CATALOG_RECOVERED', { restoredCount, insertedCount });
+    } catch {}
+
+    res.json({
+      mode: 'EXECUTION',
+      message: `Selective Recovery Complete: Re-inserted ${insertedCount} missing products and restored ${restoredCount} archived products without overwriting any existing customer data or orders.`,
+      insertedCount,
+      restoredCount,
+      totalActive: activeCount + restoredCount + insertedCount,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error: any) {
+    console.error('Catalog recovery error:', error);
+    res.status(500).json({ error: error.message || 'Catalog recovery failed.' });
   }
 });

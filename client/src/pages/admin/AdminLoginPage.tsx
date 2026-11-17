@@ -127,6 +127,7 @@ export const AdminLoginPage: React.FC = () => {
 
           <button
             type="submit"
+            aria-label="Administrator Login"
             disabled={isLoading}
             className="w-full bg-amber-400 hover:bg-amber-500 text-gray-950 font-bold py-2.5 rounded text-xs shadow-md transition disabled:opacity-50 flex items-center justify-center space-x-1.5"
           >

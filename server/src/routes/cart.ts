@@ -52,7 +52,7 @@ cartRouter.get('/', optionalToken, (req: AuthenticatedRequest, res: Response) =>
         (SELECT image_url FROM product_images pi WHERE pi.product_id = p.id ORDER BY pi.is_primary DESC LIMIT 1) as image_url
       FROM cart_items ci
       JOIN products p ON ci.product_id = p.id
-      WHERE ci.cart_id = ? AND p.is_active = 1
+      WHERE ci.cart_id = ? AND p.is_active = 1 AND p.deleted_at IS NULL
     `).all(cartId) as any[];
 
     let subtotal = 0;
@@ -91,7 +91,7 @@ cartRouter.post('/items', optionalToken, (req: AuthenticatedRequest, res: Respon
       return;
     }
 
-    const product = db.prepare('SELECT id, stock_quantity, name FROM products WHERE id = ? AND is_active = 1').get(product_id) as any;
+    const product = db.prepare('SELECT id, stock_quantity, name FROM products WHERE id = ? AND is_active = 1 AND deleted_at IS NULL').get(product_id) as any;
     if (!product) {
       res.status(404).json({ error: 'Product not found or inactive.' });
       return;

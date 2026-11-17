@@ -227,7 +227,7 @@ describe('VK Technology Autonomous Website QA & Self-Healing Suite', () => {
     let sampleProduct: any;
 
     beforeAll(async () => {
-      const res = await request(app).get('/api/products?limit=1');
+      const res = await request(app).get('/api/products?in_stock=true&limit=1');
       sampleProduct = res.body.products[0];
     });
 

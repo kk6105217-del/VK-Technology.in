@@ -38,7 +38,7 @@ exports.ordersRouter.post('/', auth_js_1.optionalToken, async (req, res) => {
         SELECT p.*, 
           (SELECT image_url FROM product_images pi WHERE pi.product_id = p.id ORDER BY pi.is_primary DESC LIMIT 1) as primary_image
         FROM products p 
-        WHERE p.id = ? AND p.is_active = 1
+        WHERE p.id = ? AND p.is_active = 1 AND p.deleted_at IS NULL
       `).get(item.product_id);
             if (!product) {
                 res.status(400).json({ error: `Product ID #${item.product_id} is no longer available.` });
@@ -454,12 +454,29 @@ exports.ordersRouter.get('/admin/all', auth_js_1.authenticateToken, auth_js_1.re
 // Admin: Update order status & tracking
 const handleOrderStatusUpdate = async (req, res) => {
     try {
-        const { order_status, payment_status, tracking_number, notes } = req.body;
+        const { order_status, payment_status, tracking_number, courier_name, tracking_url, notes } = req.body;
         const orderId = req.params.id;
         const existingOrder = database_js_1.db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId);
         if (!existingOrder) {
             res.status(404).json({ error: 'Order not found.' });
             return;
+        }
+        // Auto-restore inventory stock if order is cancelled or refunded
+        const oldStatus = existingOrder.order_status;
+        const isNewCancelOrRefund = (order_status === 'Cancelled' || order_status === 'Refunded');
+        const wasAlreadyCancelOrRefund = (oldStatus === 'Cancelled' || oldStatus === 'Refunded');
+        if (isNewCancelOrRefund && !wasAlreadyCancelOrRefund) {
+            try {
+                const items = database_js_1.db.prepare('SELECT product_id, quantity FROM order_items WHERE order_id = ?').all(orderId);
+                for (const item of items) {
+                    if (item.product_id) {
+                        database_js_1.db.prepare('UPDATE products SET stock_quantity = stock_quantity + ?, updated_at = datetime(\'now\') WHERE id = ?').run(item.quantity, item.product_id);
+                    }
+                }
+            }
+            catch (stockErr) {
+                console.warn('Failed to restore stock on cancellation:', stockErr);
+            }
         }
         // Use safe parameter fallback to null to prevent undefined binding errors in node:sqlite
         database_js_1.db.prepare(`
@@ -467,10 +484,12 @@ const handleOrderStatusUpdate = async (req, res) => {
         order_status = COALESCE(?, order_status),
         payment_status = COALESCE(?, payment_status),
         tracking_number = COALESCE(?, tracking_number),
+        courier_name = COALESCE(?, courier_name),
+        tracking_url = COALESCE(?, tracking_url),
         notes = COALESCE(?, notes),
         updated_at = datetime('now')
       WHERE id = ?
-    `).run(order_status !== undefined ? order_status : null, payment_status !== undefined ? payment_status : null, tracking_number !== undefined ? tracking_number : null, notes !== undefined ? notes : null, orderId);
+    `).run(order_status !== undefined ? order_status : null, payment_status !== undefined ? payment_status : null, tracking_number !== undefined ? tracking_number : null, courier_name !== undefined ? courier_name : null, tracking_url !== undefined ? tracking_url : null, notes !== undefined ? notes : null, orderId);
         // Record audit log
         database_js_1.db.prepare(`
       INSERT INTO admin_audit_logs (admin_email, action, target_type, target_id, details)
@@ -487,6 +506,99 @@ const handleOrderStatusUpdate = async (req, res) => {
         res.status(500).json({ error: error.message || 'Failed to update order status.' });
     }
 };
+// Get Tax Invoice for Order
+exports.ordersRouter.get('/:id/invoice', auth_js_1.optionalToken, (req, res) => {
+    try {
+        const orderId = req.params.id;
+        const order = database_js_1.db.prepare('SELECT * FROM orders WHERE id = ? OR order_number = ?').get(orderId, orderId);
+        if (!order) {
+            res.status(404).json({ error: 'Order not found.' });
+            return;
+        }
+        // Customer isolation check: if not admin, ensure order belongs to requesting user
+        const isAdmin = req.user?.role && ['admin', 'SUPER_ADMIN', 'PRODUCT_MANAGER', 'ORDER_MANAGER', 'INVENTORY_MANAGER'].includes(req.user.role);
+        if (!isAdmin && req.user && order.user_id && Number(order.user_id) !== Number(req.user.id)) {
+            res.status(403).json({ error: 'Unauthorized to view this invoice.' });
+            return;
+        }
+        const items = database_js_1.db.prepare(`
+      SELECT oi.*, p.sku, p.hsn_code 
+      FROM order_items oi
+      LEFT JOIN products p ON oi.product_id = p.id
+      WHERE oi.order_id = ?
+    `).all(order.id);
+        let shippingAddress = null;
+        try {
+            shippingAddress = JSON.parse(order.shipping_address_json);
+        }
+        catch { }
+        const invoiceNumber = `INV-VK-${String(order.id).padStart(6, '0')}`;
+        const invoiceDate = order.created_at;
+        // Calculation for Indian GST (9% CGST + 9% SGST for Intra-state AP, or 18% IGST for Inter-state)
+        const isAndhraPradesh = (shippingAddress?.state || '').toLowerCase().includes('andhra');
+        const taxableAmount = order.subtotal - (order.discount_amount || 0);
+        const cgstRate = isAndhraPradesh ? 9 : 0;
+        const sgstRate = isAndhraPradesh ? 9 : 0;
+        const igstRate = isAndhraPradesh ? 0 : 18;
+        const cgstAmount = isAndhraPradesh ? Math.round((taxableAmount * 0.09) * 100) / 100 : 0;
+        const sgstAmount = isAndhraPradesh ? Math.round((taxableAmount * 0.09) * 100) / 100 : 0;
+        const igstAmount = !isAndhraPradesh ? Math.round((taxableAmount * 0.18) * 100) / 100 : 0;
+        res.json({
+            invoice: {
+                invoice_number: invoiceNumber,
+                invoice_date: invoiceDate,
+                order_number: order.order_number,
+                order_date: order.created_at,
+                payment_method: order.payment_method,
+                payment_status: order.payment_status,
+                tracking_number: order.tracking_number,
+                courier_name: order.courier_name,
+                seller: {
+                    name: 'VK Technology',
+                    proprietor: 'S. J. V. Karthik',
+                    address: 'Pedamiram, Bhimavaram, West Godavari District, Andhra Pradesh, India - 534204',
+                    phone: '+91 8555997052',
+                    email: 'orders@vktechnology.shop',
+                    website: 'https://vktechnology.shop',
+                    gstin: '37AAJFK8291M1ZX',
+                    state: 'Andhra Pradesh',
+                    state_code: '37'
+                },
+                buyer: {
+                    name: order.customer_name,
+                    email: order.customer_email,
+                    phone: order.customer_phone,
+                    shipping_address: shippingAddress
+                },
+                items: items.map(item => ({
+                    id: item.id,
+                    product_name: item.product_name,
+                    sku: item.sku || 'VK-GEN',
+                    hsn_code: item.hsn_code || '85423100',
+                    quantity: item.quantity,
+                    unit_price: item.unit_price,
+                    total_price: item.total_price
+                })),
+                pricing: {
+                    subtotal: order.subtotal,
+                    discount_amount: order.discount_amount || 0,
+                    shipping_fee: order.shipping_fee || 0,
+                    taxable_amount: taxableAmount,
+                    cgst_rate: cgstRate,
+                    cgst_amount: cgstAmount,
+                    sgst_rate: sgstRate,
+                    sgst_amount: sgstAmount,
+                    igst_rate: igstRate,
+                    igst_amount: igstAmount,
+                    total_amount: order.total_amount
+                }
+            }
+        });
+    }
+    catch (error) {
+        res.status(500).json({ error: 'Failed to generate tax invoice.' });
+    }
+});
 exports.ordersRouter.patch('/admin/:id/status', auth_js_1.authenticateToken, auth_js_1.requireAdmin, handleOrderStatusUpdate);
 exports.ordersRouter.patch('/:id/status', auth_js_1.authenticateToken, auth_js_1.requireAdmin, handleOrderStatusUpdate);
 exports.ordersRouter.put('/admin/:id/status', auth_js_1.authenticateToken, auth_js_1.requireAdmin, handleOrderStatusUpdate);

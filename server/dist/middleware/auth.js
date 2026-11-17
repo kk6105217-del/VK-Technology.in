@@ -38,7 +38,7 @@ function authenticateToken(req, res, next) {
         next();
     });
 }
-const ALL_ADMIN_ROLES = ['admin', 'SUPER_ADMIN', 'PRODUCT_MANAGER', 'ORDER_MANAGER', 'INVENTORY_MANAGER'];
+const ALL_ADMIN_ROLES = ['admin', 'OWNER', 'SUPER_ADMIN', 'PRODUCT_MANAGER', 'ORDER_MANAGER', 'INVENTORY_MANAGER'];
 function requireAdmin(req, res, next) {
     if (!req.user) {
         res.status(401).json({ error: 'Authentication required.' });

@@ -104,6 +104,7 @@ export const Navbar: React.FC<NavbarProps> = ({ isMobileOpen = false, setIsMobil
             {/* "All" button */}
             <button
               onClick={() => setOpen(true)}
+              aria-label="All Categories"
               className="flex items-center space-x-1 px-2.5 py-1.5 hover:border border-white rounded font-bold whitespace-nowrap text-white"
             >
               <Menu size={18} />

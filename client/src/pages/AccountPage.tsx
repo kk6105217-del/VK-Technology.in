@@ -18,7 +18,7 @@ import { Address } from '../types';
 
 export const AccountPage: React.FC = () => {
   const navigate = useNavigate();
-  const { user, isAdmin, refreshUser } = useAuth();
+  const { user, isAdmin, isLoading, refreshUser } = useAuth();
 
   const [activeSection, setActiveSection] = useState<'profile' | 'addresses' | 'security'>('profile');
   const [addresses, setAddresses] = useState<Address[]>([]);
@@ -49,6 +49,7 @@ export const AccountPage: React.FC = () => {
   });
 
   useEffect(() => {
+    if (isLoading) return;
     if (!user) {
       navigate('/login?redirect=/account');
       return;
@@ -56,7 +57,7 @@ export const AccountPage: React.FC = () => {
     setFullName(user.full_name);
     setPhone(user.phone || '');
     loadAddresses();
-  }, [user]);
+  }, [user, isLoading]);
 
   const loadAddresses = async () => {
     try {
@@ -120,6 +121,14 @@ export const AccountPage: React.FC = () => {
     }
   };
 
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-[#eaeded] flex items-center justify-center">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-amber-500" />
+      </div>
+    );
+  }
+
   if (!user) return null;
 
   return (
@@ -132,6 +141,7 @@ export const AccountPage: React.FC = () => {
               {user.full_name[0]}
             </div>
             <div>
+              <span className="text-[11px] uppercase font-bold tracking-wider text-amber-600 block">Your Account</span>
               <h1 className="text-xl font-bold text-gray-900">{user.full_name}</h1>
               <p className="text-xs text-gray-500">{user.email} • Customer Account</p>
             </div>

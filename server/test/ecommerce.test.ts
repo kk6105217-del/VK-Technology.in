@@ -344,9 +344,9 @@ describe('VK Technology Full-Stack E-Commerce Platform Test Suite', () => {
 
     expect(delRes.status).toBe(200);
 
-    // Verify completely purged from central database
-    const dbCheck = db.prepare('SELECT id FROM products WHERE id = ?').get(createdId);
-    expect(dbCheck).toBeUndefined();
+    // Verify safely archived in central database with deleted_at timestamp
+    const dbCheck = db.prepare('SELECT id, deleted_at, is_active FROM products WHERE id = ?').get(createdId) as any;
+    expect(!dbCheck || dbCheck.deleted_at !== null || dbCheck.is_active === 0).toBe(true);
   });
 
   // -------------------------------------------------------------
@@ -426,20 +426,83 @@ describe('VK Technology Full-Stack E-Commerce Platform Test Suite', () => {
     expect(publishRes.status).toBe(200);
 
     // -------------------------------------------------------------
-    // Test 14: Bulk Delete Products
+    // Test 14: Safe Product Archiving (Bulk Archive to Recycle Bin)
     // -------------------------------------------------------------
-    const bulkDeleteRes = await request(app)
-      .post('/api/products/admin/bulk-delete')
+    const bulkArchiveRes = await request(app)
+      .post('/api/products/admin/bulk-archive')
       .set('Authorization', `Bearer ${adminToken}`)
       .send({ ids: [id1, id2] });
 
-    expect(bulkDeleteRes.status).toBe(200);
-    expect(bulkDeleteRes.body.deletedCount).toBe(2);
+    expect(bulkArchiveRes.status).toBe(200);
+    expect(bulkArchiveRes.body.archivedCount).toBe(2);
 
-    // Verify deleted from database
-    const check1 = db.prepare('SELECT * FROM products WHERE id = ?').get(id1);
-    const check2 = db.prepare('SELECT * FROM products WHERE id = ?').get(id2);
-    expect(check1).toBeUndefined();
-    expect(check2).toBeUndefined();
+    // Verify safely preserved in database with deleted_at timestamp
+    const check1 = db.prepare('SELECT id, is_active, deleted_at FROM products WHERE id = ?').get(id1) as any;
+    const check2 = db.prepare('SELECT id, is_active, deleted_at FROM products WHERE id = ?').get(id2) as any;
+    expect(check1).toBeDefined();
+    expect(check1.deleted_at).not.toBeNull();
+    expect(check1.is_active).toBe(0);
+    expect(check2).toBeDefined();
+    expect(check2.deleted_at).not.toBeNull();
+    expect(check2.is_active).toBe(0);
+
+    // Verify hidden from public storefront
+    const publicList = await request(app).get('/api/products');
+    const publicIds = publicList.body.products.map((p: any) => p.id);
+    expect(publicIds).not.toContain(id1);
+    expect(publicIds).not.toContain(id2);
+
+    // Verify visible in Admin Recycle Bin
+    const recycleBinList = await request(app)
+      .get('/api/products/admin/recycle-bin')
+      .set('Authorization', `Bearer ${adminToken}`);
+    const binIds = recycleBinList.body.products.map((p: any) => p.id);
+    expect(binIds).toContain(id1);
+    expect(binIds).toContain(id2);
+
+    // -------------------------------------------------------------
+    // Test 15: Restore Products from Recycle Bin
+    // -------------------------------------------------------------
+    const restoreRes = await request(app)
+      .post(`/api/products/${id1}/restore`)
+      .set('Authorization', `Bearer ${adminToken}`);
+    expect(restoreRes.status).toBe(200);
+
+    const restoredCheck1 = db.prepare('SELECT id, is_active, deleted_at FROM products WHERE id = ?').get(id1) as any;
+    expect(restoredCheck1.deleted_at).toBeNull();
+    expect(restoredCheck1.is_active).toBe(1);
+
+    // -------------------------------------------------------------
+    // Test 16: Strict Permanent Deletion (Super Admin Only)
+    // -------------------------------------------------------------
+    // Attempt permanent deletion with missing or wrong confirmation phrase -> 400
+    const failPhraseRes = await request(app)
+      .post('/api/products/admin/permanent-delete')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ ids: [id2], confirmPhrase: 'DELETE' });
+    expect(failPhraseRes.status).toBe(400);
+
+    // Valid confirmation phrase -> Permanent deletion permitted for unreferenced products
+    const permDeleteRes = await request(app)
+      .post('/api/products/admin/permanent-delete')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ ids: [id2], confirmPhrase: 'DELETE PERMANENTLY' });
+    expect(permDeleteRes.status).toBe(200);
+    expect(permDeleteRes.body.deletedCount).toBe(1);
+
+    const permanentlyDeleted = db.prepare('SELECT * FROM products WHERE id = ?').get(id2);
+    expect(permanentlyDeleted).toBeUndefined();
+
+    // -------------------------------------------------------------
+    // Test 17: Canonical Catalog Audit & Selective Recovery (Dry Run)
+    // -------------------------------------------------------------
+    const auditRes = await request(app)
+      .post('/api/products/admin/recover-missing')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ dryRun: true });
+    expect(auditRes.status).toBe(200);
+    expect(auditRes.body.mode).toBe('DRY_RUN');
+    expect(auditRes.body.totalCanonical).toBe(24);
+    expect(Array.isArray(auditRes.body.details)).toBe(true);
   });
 });

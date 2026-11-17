@@ -658,16 +658,43 @@ export const api = {
       } catch {}
       return res;
     },
-    delete: async (id: number) => {
-      const res = await request<{ message: string; productId?: number; timestamp?: string }>(`/products/${id}`, {
-        method: 'DELETE'
+    archive: async (id: number) => {
+      const res = await request<{ message: string; productId?: number; archived: boolean; timestamp?: string }>(`/products/${id}/archive`, {
+        method: 'POST'
       });
       try {
         realtimeSync.notify('PRODUCT_DELETED', { id: Number(id), ...res });
       } catch {}
       return res;
     },
+    delete: async (id: number) => {
+      // Safe Archive fallback
+      const res = await request<{ message: string; productId?: number; timestamp?: string }>(`/products/${id}`, {
+        method: 'DELETE'
+      });
+      try {
+        realtimeSync.notify('PRODUCT_DELETED', { id: Number(id), archived: true, ...res });
+      } catch {}
+      return res;
+    },
+    bulkArchive: async (ids: number[] | { all: boolean }) => {
+      const body = Array.isArray(ids) ? { ids } : ids;
+      const res = await request<{
+        message: string;
+        archivedCount: number;
+        deletedCount: number;
+        totalProcessed: number;
+      }>('/products/admin/bulk-archive', {
+        method: 'POST',
+        body: JSON.stringify(body)
+      });
+      try {
+        realtimeSync.notify('PRODUCT_DELETED', { archived: true, ...res });
+      } catch {}
+      return res;
+    },
     bulkDelete: async (ids: number[] | { all: boolean }) => {
+      // Safe Bulk Archive fallback
       const body = Array.isArray(ids) ? { ids } : ids;
       const res = await request<{
         message: string;
@@ -679,7 +706,7 @@ export const api = {
         body: JSON.stringify(body)
       });
       try {
-        realtimeSync.notify('PRODUCT_DELETED', res);
+        realtimeSync.notify('PRODUCT_DELETED', { archived: true, ...res });
       } catch {}
       return res;
     },
@@ -693,9 +720,68 @@ export const api = {
         method: 'DELETE'
       });
       try {
-        realtimeSync.notify('PRODUCT_DELETED', res);
+        realtimeSync.notify('PRODUCT_DELETED', { archived: true, ...res });
       } catch {}
       return res;
+    },
+    restore: async (id: number) => {
+      const res = await request<{ message: string; product?: Product; timestamp?: string }>(`/products/${id}/restore`, {
+        method: 'POST'
+      });
+      try {
+        realtimeSync.notify('PRODUCT_UPDATED', { id: Number(id), ...res });
+      } catch {}
+      return res;
+    },
+    bulkRestore: async (ids: number[] | { all: boolean }) => {
+      const body = Array.isArray(ids) ? { ids } : ids;
+      const res = await request<{ message: string; restoredCount: number; timestamp?: string }>('/products/admin/bulk-restore', {
+        method: 'POST',
+        body: JSON.stringify(body)
+      });
+      try {
+        realtimeSync.notify('PRODUCT_UPDATED', res);
+      } catch {}
+      return res;
+    },
+    getRecycleBin: async (params: { search?: string; category?: number | string } = {}) => {
+      const query = new URLSearchParams();
+      if (params.search) query.append('search', params.search);
+      if (params.category) query.append('category', String(params.category));
+      query.append('status', 'recycle_bin');
+      return await request<{ products: Product[] }>(`/products/admin/all?${query.toString()}`);
+    },
+    permanentDelete: async (payload: { ids?: number[]; id?: number; confirmPhrase: string }) => {
+      const res = await request<{
+        message: string;
+        deletedCount: number;
+        deletedIds: number[];
+        blockedCount: number;
+        blockedByOrders: any[];
+      }>('/products/admin/permanent-delete', {
+        method: 'POST',
+        body: JSON.stringify(payload)
+      });
+      try {
+        realtimeSync.notify('PRODUCT_PERMANENTLY_DELETED', res);
+      } catch {}
+      return res;
+    },
+    recoverCatalog: async (options: { dryRun?: boolean; execute?: boolean } = {}) => {
+      return await request<{
+        mode: string;
+        message: string;
+        totalCanonical?: number;
+        missingCount?: number;
+        archivedCount?: number;
+        activeCount?: number;
+        insertedCount?: number;
+        restoredCount?: number;
+        details?: any[];
+      }>('/products/admin/recover-missing', {
+        method: 'POST',
+        body: JSON.stringify(options)
+      });
     },
     bulkToggleStatus: async (ids: number[], is_active: boolean) => {
       const res = await request<{ message: string; count: number }>('/products/admin/bulk-status', {
@@ -932,6 +1018,8 @@ export const api = {
       }),
     getNotifications: (orderId: number) =>
       request<{ logs: any[] }>(`/orders/admin/${orderId}/notifications`),
+    getInvoice: (id: number | string) =>
+      request<{ invoice: any }>(`/orders/${id}/invoice`),
   },
 
   // Coupons
@@ -1089,17 +1177,24 @@ export const api = {
         return await request<{
           stats: {
             total_sales: number;
+            today_sales?: number;
+            monthly_revenue?: number;
             total_orders: number;
             pending_orders: number;
             completed_orders: number;
             cancelled_orders: number;
+            pending_payments?: number;
             total_products: number;
             low_stock_products: number;
             out_of_stock_products: number;
+            total_customers?: number;
+            pending_bulk_inquiries?: number;
           };
           recentOrders: any[];
           bestSellers: any[];
           dailySales: any[];
+          recentCustomers?: any[];
+          lowStockList?: any[];
         }>('/settings/admin/stats');
       } catch (err) {
         return {
@@ -1321,6 +1416,111 @@ export const api = {
       if (startDate) q.append('startDate', startDate);
       if (endDate) q.append('endDate', endDate);
       return `${API_BASE}/analytics/export/excel?${q.toString()}`;
+    }
+  },
+
+  // Customer Management
+  customers: {
+    getAdminAll: async (params: { search?: string; status?: string; page?: number; limit?: number } = {}) => {
+      const q = new URLSearchParams();
+      if (params.search) q.append('search', params.search);
+      if (params.status) q.append('status', params.status);
+      if (params.page) q.append('page', String(params.page));
+      if (params.limit) q.append('limit', String(params.limit));
+      return request<{ customers: any[]; pagination: any }>(`/admin/customers?${q.toString()}`);
+    },
+    getById: async (id: number | string) =>
+      request<{ customer: any; orders: any[]; addresses: any[] }>(`/admin/customers/${id}`),
+    updateStatus: async (id: number | string, data: { is_blocked: boolean; block_reason?: string }) =>
+      request<{ success: boolean; message: string; is_blocked: boolean; block_reason?: string }>(`/admin/customers/${id}/status`, {
+        method: 'PATCH',
+        body: JSON.stringify(data)
+      }),
+    exportCsvUrl: () => `${API_BASE}/admin/customers/export/csv`
+  },
+
+  // College & Institutional Bulk Orders
+  bulkOrders: {
+    submit: async (data: any) =>
+      request<{ success: boolean; message: string; inquiryId?: any }>('/bulk-orders', {
+        method: 'POST',
+        body: JSON.stringify(data)
+      }),
+    getAdminAll: async () =>
+      request<{ bulkOrders: any[] }>('/bulk-orders/admin'),
+    update: async (id: string | number, data: any) =>
+      request<{ success: boolean; bulkOrder: any }>(`/bulk-orders/admin/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(data)
+      })
+  },
+
+  // Staff & Permissions
+  staff: {
+    getAdminAll: async () =>
+      request<{ staff: any[] }>('/admin/staff'),
+    create: async (data: { full_name: string; email: string; password: string; phone?: string; role: string }) =>
+      request<{ success: boolean; message: string; staff: any }>('/admin/staff', {
+        method: 'POST',
+        body: JSON.stringify(data)
+      }),
+    updateRole: async (id: number | string, role: string) =>
+      request<{ success: boolean; message: string }>(`/admin/staff/${id}/role`, {
+        method: 'PATCH',
+        body: JSON.stringify({ role })
+      }),
+    delete: async (id: number | string) =>
+      request<{ success: boolean; message: string }>(`/admin/staff/${id}`, {
+        method: 'DELETE'
+      })
+  },
+
+  // Inventory Management & Audit Ledger
+  inventoryAdmin: {
+    getMovements: async (productId?: number | string) => {
+      const q = productId ? `?product_id=${productId}` : '';
+      return request<{ movements: any[] }>(`/inventory/movements${q}`);
+    },
+    adjustStock: async (data: {
+      product_id: number;
+      change_type?: string;
+      quantity_change: number;
+      reason?: string;
+      supplier_name?: string;
+    }) =>
+      request<{ success: boolean; message: string; product: any }>('/inventory/adjust', {
+        method: 'POST',
+        body: JSON.stringify(data)
+      })
+  },
+
+  // Database Health, Backups & Maintenance
+  databaseAdmin: {
+    getStatus: async () =>
+      request<any>('/database/status'),
+    triggerBackup: async () =>
+      request<{ success: boolean; backupName?: string; message?: string }>('/database/backup', {
+        method: 'POST'
+      }),
+    restoreBackup: async (backupDir: string) =>
+      request<{ success: boolean; message?: string }>('/database/restore', {
+        method: 'POST',
+        body: JSON.stringify({ backupDir })
+      }),
+    rebuildIndexes: async () =>
+      request<{ success: boolean; message?: string }>('/database/indexes', {
+        method: 'POST'
+      }),
+    runMigration: async () =>
+      request<{ success: boolean; message?: string }>('/database/migrate', {
+        method: 'POST'
+      }),
+    getAuditLogs: async (params: { limit?: number; action?: string; adminEmail?: string } = {}) => {
+      const q = new URLSearchParams();
+      if (params.limit) q.append('limit', String(params.limit));
+      if (params.action) q.append('action', params.action);
+      if (params.adminEmail) q.append('adminEmail', params.adminEmail);
+      return request<{ auditLogs: any[] }>(`/database/audit-logs?${q.toString()}`);
     }
   }
 };

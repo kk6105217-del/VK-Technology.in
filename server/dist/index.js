@@ -26,16 +26,46 @@ const upi_js_1 = require("./routes/upi.js");
 const projects_js_1 = require("./routes/projects.js");
 const apps_js_1 = require("./routes/apps.js");
 const analytics_js_1 = require("./routes/analytics.js");
+const database_js_2 = require("./routes/database.js");
+const bulkOrders_js_1 = require("./routes/bulkOrders.js");
+const customers_js_1 = require("./routes/customers.js");
+const staff_js_1 = require("./routes/staff.js");
+const inventory_js_1 = require("./routes/inventory.js");
 const events_js_1 = require("./services/events.js");
 const openapi_js_1 = require("./openapi.js");
+const database_js_3 = require("./config/database.js");
+const rateLimiter_js_1 = require("./middleware/rateLimiter.js");
+const validate_js_1 = require("./middleware/validate.js");
+const errorHandler_js_1 = require("./middleware/errorHandler.js");
+const migrateFromSqlite_js_1 = require("./migrations/migrateFromSqlite.js");
 const app = (0, express_1.default)();
-// Initialize database & seed defaults safely
+// Security Headers (Helmet) & Rate Limiting
+app.use(rateLimiter_js_1.securityHeaders);
+app.use(rateLimiter_js_1.apiRateLimiter);
+// Initialize databases & seed defaults safely
 try {
     (0, database_js_1.initDatabase)();
 }
 catch (err) {
-    console.warn('Database initialization warning:', err);
+    console.warn('SQLite database initialization warning:', err);
 }
+// Initialize MongoDB Atlas connection asynchronously
+(0, database_js_3.connectToDatabase)()
+    .then(async (m) => {
+    if (m && (0, database_js_3.isMongoConnected)()) {
+        console.log('[MongoDB Atlas] Central Database connection verified.');
+        // Auto-run idempotent migration to ensure all products & admins exist in Mongo
+        try {
+            await (0, migrateFromSqlite_js_1.runMigrationToMongo)();
+        }
+        catch (migErr) {
+            console.warn('[MongoDB Atlas] Auto-migration warning:', migErr.message);
+        }
+    }
+})
+    .catch((err) => {
+    console.warn('[MongoDB Atlas] Deferred connection note:', err.message);
+});
 // CORS configuration
 app.use((0, cors_1.default)({
     origin: true, // Allow frontend dev and prod
@@ -44,6 +74,8 @@ app.use((0, cors_1.default)({
 // Body parser
 app.use(express_1.default.json({ limit: '10mb' }));
 app.use(express_1.default.urlencoded({ extended: true, limit: '10mb' }));
+// NoSQL Operator Injection Sanitization
+app.use(validate_js_1.sanitizeNoSqlInput);
 // Static uploads directory (safe for serverless read-only filesystems)
 const uploadsDir = (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME)
     ? path_1.default.join(os_1.default.tmpdir(), 'uploads')
@@ -81,6 +113,11 @@ const routeBindings = [
     ['/projects', projects_js_1.projectsRouter],
     ['/apps', apps_js_1.appsRouter],
     ['/analytics', analytics_js_1.analyticsRouter],
+    ['/database', database_js_2.databaseRouter],
+    ['/bulk-orders', bulkOrders_js_1.bulkOrdersRouter],
+    ['/customers', customers_js_1.customersRouter],
+    ['/staff', staff_js_1.staffRouter],
+    ['/inventory', inventory_js_1.inventoryRouter],
 ];
 routeBindings.forEach(([prefix, router]) => {
     app.use(`/api${prefix}`, router);
@@ -98,6 +135,17 @@ app.use('/api/admin/products', products_js_1.productsRouter);
 app.use('/api/admin/projects', projects_js_1.projectsRouter);
 app.use('/api/admin/apps', apps_js_1.appsRouter);
 app.use('/api/admin/analytics', analytics_js_1.analyticsRouter);
+app.use('/api/admin/customers', customers_js_1.customersRouter);
+app.use('/api/admin/staff', staff_js_1.staffRouter);
+app.use('/api/admin/inventory', inventory_js_1.inventoryRouter);
+app.use('/api/admin/dashboard', (req, res, next) => {
+    req.url = '/admin/stats';
+    (0, settings_js_1.settingsRouter)(req, res, next);
+});
+app.use('/api/admin/logs', (req, res, next) => {
+    req.url = '/audit-logs';
+    (0, database_js_2.databaseRouter)(req, res, next);
+});
 // Health check endpoint on both /api/health and /health
 const healthHandler = (_req, res) => {
     res.json({
@@ -236,13 +284,8 @@ app.get('/api/internal/backend-health', async (req, res) => {
         res.status(502).json({ error: 'Failed to communicate with internal backend service', details: err.message });
     }
 });
-// Global error handler
-app.use((err, req, res, next) => {
-    console.error('Unhandled server error:', err);
-    res.status(err.status || 500).json({
-        error: err.message || 'Internal Server Error'
-    });
-});
+// Global production error handler (stack traces hidden in production)
+app.use(errorHandler_js_1.errorHandler);
 if (!process.env.VERCEL &&
     !process.env.AWS_LAMBDA_FUNCTION_NAME &&
     !process.env.VERCEL_ENV &&

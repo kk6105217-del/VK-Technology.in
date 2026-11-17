@@ -56,6 +56,22 @@ settingsRouter.get('/admin/stats', authenticateToken, requireAdmin, (req: Authen
       FROM orders
     `).get() as any;
 
+    const todayRow = db.prepare(`
+      SELECT COALESCE(SUM(CASE WHEN payment_status = 'Paid' OR (payment_method = 'cod' AND order_status != 'Cancelled') THEN total_amount ELSE 0 END), 0) as today_sales
+      FROM orders
+      WHERE date(created_at) = date('now')
+    `).get() as any;
+
+    const monthRow = db.prepare(`
+      SELECT COALESCE(SUM(CASE WHEN payment_status = 'Paid' OR (payment_method = 'cod' AND order_status != 'Cancelled') THEN total_amount ELSE 0 END), 0) as monthly_revenue
+      FROM orders
+      WHERE created_at >= date('now', 'start of month')
+    `).get() as any;
+
+    const pendingPaymentsRow = db.prepare(`
+      SELECT COUNT(*) as pending_payments FROM orders WHERE payment_status LIKE '%Pending%'
+    `).get() as any;
+
     // 2. Inventory Stats
     const productStats = db.prepare(`
       SELECT 
@@ -65,6 +81,28 @@ settingsRouter.get('/admin/stats', authenticateToken, requireAdmin, (req: Authen
       FROM products
       WHERE is_active = 1
     `).get() as any;
+
+    const lowStockList = db.prepare(`
+      SELECT p.id, p.name, p.sku, p.stock_quantity,
+        (SELECT image_url FROM product_images pi WHERE pi.product_id = p.id ORDER BY pi.is_primary DESC LIMIT 1) as image_url
+      FROM products p
+      WHERE p.is_active = 1 AND p.stock_quantity <= 5
+      ORDER BY p.stock_quantity ASC
+      LIMIT 8
+    `).all();
+
+    // Customers Stats
+    const custRow = db.prepare(`SELECT COUNT(*) as total_customers FROM users WHERE role = 'customer'`).get() as any;
+    const recentCustomers = db.prepare(`
+      SELECT id, full_name, email, phone, created_at FROM users WHERE role = 'customer' ORDER BY id DESC LIMIT 5
+    `).all();
+
+    // Bulk Order Inquiries
+    let pendingBulkCount = 0;
+    try {
+      const bRow = db.prepare(`SELECT COUNT(*) as count FROM bulk_orders WHERE approval_status = 'pending'`).get() as any;
+      pendingBulkCount = bRow?.count || 0;
+    } catch {}
 
     // 3. Recent Orders
     const recentOrders = db.prepare(`
@@ -102,17 +140,24 @@ settingsRouter.get('/admin/stats', authenticateToken, requireAdmin, (req: Authen
     res.json({
       stats: {
         total_sales: Math.round(orderStats.total_sales * 100) / 100,
+        today_sales: Math.round((todayRow?.today_sales || 0) * 100) / 100,
+        monthly_revenue: Math.round((monthRow?.monthly_revenue || 0) * 100) / 100,
         total_orders: orderStats.total_orders,
         pending_orders: orderStats.pending_orders,
         completed_orders: orderStats.completed_orders,
         cancelled_orders: orderStats.cancelled_orders,
+        pending_payments: pendingPaymentsRow?.pending_payments || 0,
         total_products: productStats.total_products,
         low_stock_products: productStats.low_stock_products,
-        out_of_stock_products: productStats.out_of_stock_products
+        out_of_stock_products: productStats.out_of_stock_products,
+        total_customers: custRow?.total_customers || 0,
+        pending_bulk_inquiries: pendingBulkCount
       },
       recentOrders,
       bestSellers,
-      dailySales
+      dailySales,
+      recentCustomers,
+      lowStockList
     });
   } catch (error: any) {
     console.error('Stats error:', error);

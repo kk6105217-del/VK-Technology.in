@@ -258,7 +258,7 @@ export const ProductsPage: React.FC<ProductsPageProps> = ({ fixedCategorySlug, c
             {/* Price Filter */}
             <div className="mb-5 border-t border-gray-100 pt-4">
               <h4 className="font-bold text-gray-900 text-xs uppercase tracking-wide mb-2">
-                Price (₹)
+                Price Range (₹)
               </h4>
               <div className="space-y-1.5 mb-3">
                 <button

@@ -13,7 +13,14 @@ import {
   EyeOff,
   Image as ImageIcon,
   Check,
-  CheckSquare
+  CheckSquare,
+  Archive,
+  RotateCcw,
+  ShieldAlert,
+  Layers,
+  RefreshCw,
+  History,
+  AlertTriangle
 } from 'lucide-react';
 import { api } from '../../services/api';
 import { Product, Category } from '../../types';
@@ -21,6 +28,8 @@ import { useCatalogSync } from '../../hooks/useCatalogSync';
 
 export const AdminProducts: React.FC = () => {
   const [products, setProducts] = useState<Product[]>([]);
+  const [recycleBinProducts, setRecycleBinProducts] = useState<Product[]>([]);
+  const [activeTab, setActiveTab] = useState<'active' | 'recycle_bin'>('active');
   const [categories, setCategories] = useState<Category[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterCategory, setFilterCategory] = useState('');
@@ -30,12 +39,26 @@ export const AdminProducts: React.FC = () => {
   const [selectedProductIds, setSelectedProductIds] = useState<number[]>([]);
   const [isBulkOperating, setIsBulkOperating] = useState(false);
 
-  // Modal State
+  // Modal State (Create / Edit)
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [formSubmitting, setFormSubmitting] = useState(false);
   const [formSuccess, setFormSuccess] = useState('');
   const [formError, setFormError] = useState('');
+
+  // Permanent Delete Modal State (Super Admin Only)
+  const [isPermanentModalOpen, setIsPermanentModalOpen] = useState(false);
+  const [permanentTargetIds, setPermanentTargetIds] = useState<number[]>([]);
+  const [confirmPhrase, setConfirmPhrase] = useState('');
+  const [isPermDeleting, setIsPermDeleting] = useState(false);
+  const [permError, setPermError] = useState('');
+
+  // Catalog Audit & Selective Recovery Modal
+  const [isRecoveryModalOpen, setIsRecoveryModalOpen] = useState(false);
+  const [recoveryAudit, setRecoveryAudit] = useState<any>(null);
+  const [isAuditing, setIsAuditing] = useState(false);
+  const [isRecovering, setIsRecovering] = useState(false);
+  const [recoveryMessage, setRecoveryMessage] = useState('');
 
   // Form Fields
   const [name, setName] = useState('');
@@ -77,13 +100,15 @@ export const AdminProducts: React.FC = () => {
   const loadData = async () => {
     try {
       setIsLoading(true);
-      const [catsRes, prodsRes] = await Promise.all([
+      const [catsRes, prodsRes, binRes] = await Promise.all([
         api.categories.getAll(),
-        api.products.getAdminAll()
+        api.products.getAdminAll({ status: 'all' }),
+        api.products.getRecycleBin()
       ]);
       setCategories(catsRes.categories || []);
       setProducts(prodsRes.products || []);
-      if (catsRes.categories && catsRes.categories.length > 0) {
+      setRecycleBinProducts(binRes.products || []);
+      if (catsRes.categories && catsRes.categories.length > 0 && !categoryId) {
         setCategoryId(catsRes.categories[0].id);
       }
     } catch (e) {
@@ -255,14 +280,25 @@ export const AdminProducts: React.FC = () => {
     }
   };
 
-  const handleDeleteProduct = async (id: number, prodName: string) => {
-    if (window.confirm(`Are you sure you want to permanently delete "${prodName}"?`)) {
+  // Safe Archive: Soft-deletes product and moves to Recycle Bin
+  const handleArchiveProduct = async (id: number, prodName: string) => {
+    if (window.confirm(`Move "${prodName}" to the Recycle Bin?\n\nIt will be unpublished from the public storefront and customer checkout, but safely preserved in the database.`)) {
       try {
-        await api.products.delete(id);
+        await api.products.archive(id);
         await loadData();
       } catch (err: any) {
-        alert(err.message || 'Failed to delete product');
+        alert(err.message || 'Failed to archive product');
       }
+    }
+  };
+
+  // Restore product from Recycle Bin back to Active catalog
+  const handleRestoreProduct = async (id: number, prodName: string) => {
+    try {
+      await api.products.restore(id);
+      await loadData();
+    } catch (err: any) {
+      alert(err.message || 'Failed to restore product');
     }
   };
 
@@ -284,8 +320,9 @@ export const AdminProducts: React.FC = () => {
     }
   };
 
-  // Filter products locally
-  const filteredProducts = products.filter(p => {
+  // Filter products locally based on active tab
+  const currentCatalog = activeTab === 'active' ? products : recycleBinProducts;
+  const filteredProducts = currentCatalog.filter(p => {
     const matchesSearch = p.name.toLowerCase().includes(searchQuery.toLowerCase()) || p.sku.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesCat = !filterCategory || p.category_id === Number(filterCategory);
     return matchesSearch && matchesCat;
@@ -307,25 +344,105 @@ export const AdminProducts: React.FC = () => {
     );
   };
 
-  const handleBulkDelete = async () => {
+  // Bulk Safe Archive (Active Tab)
+  const handleBulkArchive = async () => {
     if (selectedProductIds.length === 0) return;
-    const isAllStore = selectedProductIds.length === products.length;
-    const confirmPrompt = isAllStore
-      ? `⚠️ DANGER / CONFIRMATION: Are you sure you want to DELETE ALL ${selectedProductIds.length} products from the store?\n\nProducts in existing customer orders will be preserved and safely archived. Products without orders will be permanently removed.`
-      : `Are you sure you want to delete ${selectedProductIds.length} selected products?\n\nProducts in existing customer orders will be preserved and safely archived.`;
+    const confirmPrompt = `Move ${selectedProductIds.length} selected products to the Recycle Bin?\n\nThey will be safely archived and unpublished from the public storefront.`;
 
     if (window.confirm(confirmPrompt)) {
       try {
         setIsBulkOperating(true);
-        const res = await api.products.bulkDelete(selectedProductIds);
+        const res = await api.products.bulkArchive(selectedProductIds);
         setSelectedProductIds([]);
         await loadData();
         alert(res.message);
       } catch (err: any) {
-        alert(err.message || 'Failed to delete selected products.');
+        alert(err.message || 'Failed to archive selected products.');
       } finally {
         setIsBulkOperating(false);
       }
+    }
+  };
+
+  // Bulk Restore (Recycle Bin Tab)
+  const handleBulkRestore = async () => {
+    if (selectedProductIds.length === 0) return;
+    try {
+      setIsBulkOperating(true);
+      const res = await api.products.bulkRestore(selectedProductIds);
+      setSelectedProductIds([]);
+      await loadData();
+      alert(res.message);
+    } catch (err: any) {
+      alert(err.message || 'Failed to restore selected products.');
+    } finally {
+      setIsBulkOperating(false);
+    }
+  };
+
+  // Permanent Delete Modal opener (Super Admin)
+  const openPermanentDeleteModal = (ids: number[]) => {
+    setPermanentTargetIds(ids);
+    setConfirmPhrase('');
+    setPermError('');
+    setIsPermanentModalOpen(true);
+  };
+
+  const handleExecutePermanentDelete = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (confirmPhrase !== 'DELETE PERMANENTLY') {
+      setPermError('You must type exactly "DELETE PERMANENTLY" to confirm.');
+      return;
+    }
+
+    try {
+      setIsPermDeleting(true);
+      setPermError('');
+      const res = await api.products.permanentDelete({
+        ids: permanentTargetIds,
+        confirmPhrase
+      });
+      setIsPermanentModalOpen(false);
+      setSelectedProductIds([]);
+      await loadData();
+      alert(res.message);
+    } catch (err: any) {
+      setPermError(err.message || 'Permanent deletion failed.');
+    } finally {
+      setIsPermDeleting(false);
+    }
+  };
+
+  // Catalog Audit & Selective Recovery
+  const handleOpenAuditModal = async () => {
+    try {
+      setIsAuditing(true);
+      setRecoveryMessage('');
+      const report = await api.products.recoverCatalog({ dryRun: true });
+      setRecoveryAudit(report);
+      setIsRecoveryModalOpen(true);
+    } catch (err: any) {
+      alert(err.message || 'Failed to audit catalog');
+    } finally {
+      setIsAuditing(false);
+    }
+  };
+
+  const handleExecuteSelectiveRecovery = async () => {
+    if (!window.confirm('Are you sure you want to restore archived products and re-insert missing canonical products?\n\nThis will NOT overwrite customer accounts, orders, or modified products.')) {
+      return;
+    }
+    try {
+      setIsRecovering(true);
+      const res = await api.products.recoverCatalog({ dryRun: false, execute: true });
+      setRecoveryMessage(res.message);
+      await loadData();
+      const updatedAudit = await api.products.recoverCatalog({ dryRun: true });
+      setRecoveryAudit(updatedAudit);
+    } catch (err: any) {
+      alert(err.message || 'Recovery execution failed.');
+    } finally {
+      setIsRecovering(false);
     }
   };
 
@@ -381,6 +498,56 @@ export const AdminProducts: React.FC = () => {
         </div>
       </div>
 
+      {/* Navigation Tabs: Active Products vs Recycle Bin */}
+      <div className="flex items-center space-x-2 border-b border-gray-200">
+        <button
+          onClick={() => { setActiveTab('active'); setSelectedProductIds([]); }}
+          aria-label="Active Products Tab"
+          className={`pb-2.5 px-4 text-xs font-bold flex items-center space-x-2 border-b-2 transition ${
+            activeTab === 'active'
+              ? 'border-amber-500 text-amber-700 bg-amber-50/50 rounded-t-lg'
+              : 'border-transparent text-gray-500 hover:text-gray-900'
+          }`}
+        >
+          <Layers size={14} />
+          <span>Active Products</span>
+          <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono ${
+            activeTab === 'active' ? 'bg-amber-200 text-amber-900' : 'bg-gray-100 text-gray-600'
+          }`}>
+            {products.length}
+          </span>
+        </button>
+
+        <button
+          onClick={() => { setActiveTab('recycle_bin'); setSelectedProductIds([]); }}
+          aria-label="Recycle Bin Tab"
+          className={`pb-2.5 px-4 text-xs font-bold flex items-center space-x-2 border-b-2 transition ${
+            activeTab === 'recycle_bin'
+              ? 'border-red-500 text-red-700 bg-red-50/50 rounded-t-lg'
+              : 'border-transparent text-gray-500 hover:text-gray-900'
+          }`}
+        >
+          <Trash2 size={14} />
+          <span>Recycle Bin</span>
+          <span className={`px-2 py-0.5 rounded-full text-[10px] font-mono ${
+            activeTab === 'recycle_bin' ? 'bg-red-200 text-red-900' : 'bg-gray-100 text-gray-600'
+          }`}>
+            {recycleBinProducts.length}
+          </span>
+        </button>
+
+        <div className="flex-1" />
+
+        <button
+          onClick={handleOpenAuditModal}
+          className="pb-2 text-xs font-semibold text-gray-600 hover:text-indigo-600 flex items-center space-x-1.5 transition px-2"
+          title="Audit and recover canonical catalog products"
+        >
+          <RefreshCw size={13} className={isAuditing ? 'animate-spin' : ''} />
+          <span>Audit Catalog (24 Products)</span>
+        </button>
+      </div>
+
       {/* Floating Bulk Action Bar */}
       {selectedProductIds.length > 0 && (
         <div className="bg-gray-900 text-white px-4 py-3 rounded-xl shadow-lg border border-gray-800 flex flex-wrap items-center justify-between gap-3 animate-in fade-in slide-in-from-top-2">
@@ -389,7 +556,7 @@ export const AdminProducts: React.FC = () => {
               {selectedProductIds.length}
             </div>
             <span className="text-xs font-semibold text-gray-200">
-              {selectedProductIds.length} of {products.length} products selected
+              {selectedProductIds.length} of {currentCatalog.length} {activeTab === 'active' ? 'active' : 'archived'} products selected
             </span>
             {selectedProductIds.length < filteredProducts.length && (
               <button
@@ -401,34 +568,53 @@ export const AdminProducts: React.FC = () => {
             )}
           </div>
           <div className="flex items-center space-x-2">
-            <button
-              disabled={isBulkOperating}
-              onClick={() => handleBulkToggleStatus(true)}
-              className="bg-gray-800 hover:bg-gray-700 text-emerald-400 border border-emerald-900/60 font-semibold px-3 py-1.5 rounded text-xs flex items-center space-x-1 transition disabled:opacity-50"
-            >
-              <Eye size={13} />
-              <span>Publish Selected</span>
-            </button>
-            <button
-              disabled={isBulkOperating}
-              onClick={() => handleBulkToggleStatus(false)}
-              className="bg-gray-800 hover:bg-gray-700 text-amber-300 border border-amber-900/60 font-semibold px-3 py-1.5 rounded text-xs flex items-center space-x-1 transition disabled:opacity-50"
-            >
-              <EyeOff size={13} />
-              <span>Unpublish Selected</span>
-            </button>
-            <button
-              disabled={isBulkOperating}
-              onClick={handleBulkDelete}
-              className="bg-red-600 hover:bg-red-700 text-white font-bold px-3 py-1.5 rounded text-xs shadow flex items-center space-x-1 transition disabled:opacity-50"
-            >
-              <Trash2 size={13} />
-              <span>
-                {selectedProductIds.length === products.length
-                  ? 'Delete All Products'
-                  : `Delete Selected (${selectedProductIds.length})`}
-              </span>
-            </button>
+            {activeTab === 'active' ? (
+              <>
+                <button
+                  disabled={isBulkOperating}
+                  onClick={() => handleBulkToggleStatus(true)}
+                  className="bg-gray-800 hover:bg-gray-700 text-emerald-400 border border-emerald-900/60 font-semibold px-3 py-1.5 rounded text-xs flex items-center space-x-1 transition disabled:opacity-50"
+                >
+                  <Eye size={13} />
+                  <span>Publish Selected</span>
+                </button>
+                <button
+                  disabled={isBulkOperating}
+                  onClick={() => handleBulkToggleStatus(false)}
+                  className="bg-gray-800 hover:bg-gray-700 text-amber-300 border border-amber-900/60 font-semibold px-3 py-1.5 rounded text-xs flex items-center space-x-1 transition disabled:opacity-50"
+                >
+                  <EyeOff size={13} />
+                  <span>Unpublish Selected</span>
+                </button>
+                <button
+                  disabled={isBulkOperating}
+                  onClick={handleBulkArchive}
+                  className="bg-amber-600 hover:bg-amber-700 text-white font-bold px-3 py-1.5 rounded text-xs shadow flex items-center space-x-1 transition disabled:opacity-50"
+                >
+                  <Archive size={13} />
+                  <span>Archive Selected ({selectedProductIds.length})</span>
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  disabled={isBulkOperating}
+                  onClick={handleBulkRestore}
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-3 py-1.5 rounded text-xs shadow flex items-center space-x-1 transition disabled:opacity-50"
+                >
+                  <RotateCcw size={13} />
+                  <span>Restore Selected ({selectedProductIds.length})</span>
+                </button>
+                <button
+                  disabled={isBulkOperating}
+                  onClick={() => openPermanentDeleteModal(selectedProductIds)}
+                  className="bg-red-600 hover:bg-red-700 text-white font-bold px-3 py-1.5 rounded text-xs shadow flex items-center space-x-1 transition disabled:opacity-50"
+                >
+                  <Trash2 size={13} />
+                  <span>Permanently Delete Selected ({selectedProductIds.length})</span>
+                </button>
+              </>
+            )}
             <button
               onClick={() => setSelectedProductIds([])}
               className="text-gray-400 hover:text-white p-1.5 rounded hover:bg-gray-800 transition"
@@ -496,117 +682,179 @@ export const AdminProducts: React.FC = () => {
                 <th className="py-3 px-3">Category</th>
                 <th className="py-3 px-3">Price (₹)</th>
                 <th className="py-3 px-3">Stock Count</th>
-                <th className="py-3 px-3">Status</th>
+                <th className="py-3 px-3">{activeTab === 'active' ? 'Status' : 'Archived At'}</th>
                 <th className="py-3 px-4 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {filteredProducts.map((p) => {
-                const isOutOfStock = p.stock_quantity <= 0;
-                const isLowStock = p.stock_quantity > 0 && p.stock_quantity <= 5;
-                const isSelected = selectedProductIds.includes(p.id);
-
-                return (
-                  <tr key={p.id} className={`hover:bg-gray-50 transition ${isSelected ? 'bg-amber-50/40' : ''}`}>
-                    <td className="py-3 px-3 w-10 text-center">
-                      <input
-                        type="checkbox"
-                        aria-label={`Select ${p.name}`}
-                        checked={isSelected}
-                        onChange={() => toggleSelectProduct(p.id)}
-                        className="rounded border-gray-300 text-amber-500 focus:ring-amber-400 cursor-pointer w-4 h-4"
-                      />
-                    </td>
-                    <td className="py-3 px-4 flex items-center space-x-3">
-                      <img
-                        src={p.primary_image || 'https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=100&q=80'}
-                        alt={p.name}
-                        className="w-10 h-10 object-contain rounded border bg-gray-50 p-1 shrink-0"
-                      />
-                      <div>
-                        <Link
-                          to={`/product/${p.slug}`}
-                          target="_blank"
-                          className="font-bold text-gray-900 hover:text-amber-600 line-clamp-1"
-                        >
-                          {p.name}
-                        </Link>
-                        <span className="text-[11px] text-gray-400 font-mono block">
-                          SKU: {p.sku} {p.brand ? `• ${p.brand}` : ''}
-                        </span>
+              {filteredProducts.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="py-12 text-center text-gray-500">
+                    {activeTab === 'recycle_bin' ? (
+                      <div className="flex flex-col items-center justify-center space-y-2">
+                        <Trash2 size={32} className="text-gray-300" />
+                        <p className="font-semibold text-gray-700">Recycle Bin is empty</p>
+                        <p className="text-xs text-gray-400">Products moved to Recycle Bin will be safely preserved here.</p>
                       </div>
-                    </td>
-
-                    <td className="py-3 px-3 text-gray-600">
-                      {p.category_name || 'Electronics'}
-                    </td>
-
-                    <td className="py-3 px-3">
-                      <div className="font-bold text-gray-900">
-                        ₹{p.discounted_price || p.regular_price}
+                    ) : (
+                      <div className="flex flex-col items-center justify-center space-y-2">
+                        <Layers size={32} className="text-gray-300" />
+                        <p className="font-semibold text-gray-700">No active products match your criteria</p>
                       </div>
-                      {p.discounted_price && (
-                        <span className="text-[10px] text-gray-400 line-through">
-                          ₹{p.regular_price}
-                        </span>
-                      )}
-                    </td>
+                    )}
+                  </td>
+                </tr>
+              ) : (
+                filteredProducts.map((p) => {
+                  const isOutOfStock = p.stock_quantity <= 0;
+                  const isLowStock = p.stock_quantity > 0 && p.stock_quantity <= 5;
+                  const isSelected = selectedProductIds.includes(p.id);
 
-                    <td className="py-3 px-3">
-                      <div className="flex items-center space-x-1.5">
-                        <button
-                          onClick={() => handleQuickStock(p.id, p.stock_quantity - 1)}
-                          className="w-5 h-5 rounded bg-gray-100 hover:bg-gray-200 text-gray-700 flex items-center justify-center font-bold"
-                        >
-                          -
-                        </button>
-                        <span className={`font-mono font-bold px-1.5 ${
-                          isOutOfStock ? 'text-red-600' : isLowStock ? 'text-orange-600' : 'text-gray-900'
-                        }`}>
-                          {p.stock_quantity}
-                        </span>
-                        <button
-                          onClick={() => handleQuickStock(p.id, p.stock_quantity + 1)}
-                          className="w-5 h-5 rounded bg-gray-100 hover:bg-gray-200 text-gray-700 flex items-center justify-center font-bold"
-                        >
-                          +
-                        </button>
-                      </div>
-                    </td>
+                  return (
+                    <tr key={p.id} className={`hover:bg-gray-50 transition ${isSelected ? 'bg-amber-50/40' : ''}`}>
+                      <td className="py-3 px-3 w-10 text-center">
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${p.name}`}
+                          checked={isSelected}
+                          onChange={() => toggleSelectProduct(p.id)}
+                          className="rounded border-gray-300 text-amber-500 focus:ring-amber-400 cursor-pointer w-4 h-4"
+                        />
+                      </td>
+                      <td className="py-3 px-4 flex items-center space-x-3">
+                        <img
+                          src={p.primary_image || 'https://images.unsplash.com/photo-1518770660439-4636190af475?auto=format&fit=crop&w=100&q=80'}
+                          alt={p.name}
+                          className="w-10 h-10 object-contain rounded border bg-gray-50 p-1 shrink-0"
+                        />
+                        <div>
+                          {activeTab === 'active' ? (
+                            <Link
+                              to={`/product/${p.slug}`}
+                              target="_blank"
+                              className="font-bold text-gray-900 hover:text-amber-600 line-clamp-1"
+                            >
+                              {p.name}
+                            </Link>
+                          ) : (
+                            <span className="font-bold text-gray-700 line-clamp-1">
+                              {p.name}
+                            </span>
+                          )}
+                          <span className="text-[11px] text-gray-400 font-mono block">
+                            SKU: {p.sku} {p.brand ? `• ${p.brand}` : ''}
+                          </span>
+                        </div>
+                      </td>
 
-                    <td className="py-3 px-3">
-                      <button
-                        onClick={() => handleToggleStatus(p.id, p.is_active)}
-                        className={`inline-flex items-center space-x-1 px-2 py-0.5 rounded text-[11px] font-bold ${
-                          p.is_active
-                            ? 'bg-emerald-100 text-emerald-800'
-                            : 'bg-gray-200 text-gray-600'
-                        }`}
-                      >
-                        {p.is_active ? <Eye size={12} /> : <EyeOff size={12} />}
-                        <span>{p.is_active ? 'Published' : 'Hidden'}</span>
-                      </button>
-                    </td>
+                      <td className="py-3 px-3 text-gray-600">
+                        {p.category_name || 'Electronics'}
+                      </td>
 
-                    <td className="py-3 px-4 text-right space-x-2">
-                      <button
-                        onClick={() => openEditModal(p)}
-                        className="p-1 text-gray-600 hover:text-amber-600 transition"
-                        title="Edit Product"
-                      >
-                        <Edit size={16} />
-                      </button>
-                      <button
-                        onClick={() => handleDeleteProduct(p.id, p.name)}
-                        className="p-1 text-gray-400 hover:text-red-600 transition"
-                        title="Delete Product"
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
+                      <td className="py-3 px-3">
+                        <div className="font-bold text-gray-900">
+                          ₹{p.discounted_price || p.regular_price}
+                        </div>
+                        {p.discounted_price && (
+                          <span className="text-[10px] text-gray-400 line-through">
+                            ₹{p.regular_price}
+                          </span>
+                        )}
+                      </td>
+
+                      <td className="py-3 px-3">
+                        {activeTab === 'active' ? (
+                          <div className="flex items-center space-x-1.5">
+                            <button
+                              onClick={() => handleQuickStock(p.id, p.stock_quantity - 1)}
+                              aria-label={`Decrease stock for ${p.name}`}
+                              className="w-5 h-5 rounded bg-gray-100 hover:bg-gray-200 text-gray-700 flex items-center justify-center font-bold"
+                            >
+                              -
+                            </button>
+                            <span className={`font-mono font-bold px-1.5 ${
+                              isOutOfStock ? 'text-red-600' : isLowStock ? 'text-orange-600' : 'text-gray-900'
+                            }`}>
+                              {p.stock_quantity}
+                            </span>
+                            <button
+                              onClick={() => handleQuickStock(p.id, p.stock_quantity + 1)}
+                              aria-label={`Increase stock for ${p.name}`}
+                              className="w-5 h-5 rounded bg-gray-100 hover:bg-gray-200 text-gray-700 flex items-center justify-center font-bold"
+                            >
+                              +
+                            </button>
+                          </div>
+                        ) : (
+                          <span className="font-mono font-semibold text-gray-600">
+                            {p.stock_quantity} units
+                          </span>
+                        )}
+                      </td>
+
+                      <td className="py-3 px-3">
+                        {activeTab === 'active' ? (
+                          <button
+                            onClick={() => handleToggleStatus(p.id, p.is_active)}
+                            className={`inline-flex items-center space-x-1 px-2 py-0.5 rounded text-[11px] font-bold ${
+                              p.is_active
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : 'bg-gray-200 text-gray-600'
+                            }`}
+                          >
+                            {p.is_active ? <Eye size={12} /> : <EyeOff size={12} />}
+                            <span>{p.is_active ? 'Published' : 'Hidden'}</span>
+                          </button>
+                        ) : (
+                          <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded text-[11px] font-bold bg-amber-100 text-amber-800">
+                            <History size={11} />
+                            <span>{p.deleted_at ? new Date(p.deleted_at).toLocaleDateString() : 'Archived'}</span>
+                          </span>
+                        )}
+                      </td>
+
+                      <td className="py-3 px-4 text-right space-x-2">
+                        {activeTab === 'active' ? (
+                          <>
+                            <button
+                              onClick={() => openEditModal(p)}
+                              className="p-1 text-gray-600 hover:text-amber-600 transition"
+                              title="Edit Product"
+                            >
+                              <Edit size={16} />
+                            </button>
+                            <button
+                              onClick={() => handleArchiveProduct(p.id, p.name)}
+                              className="p-1 text-gray-400 hover:text-amber-600 transition"
+                              title="Move to Recycle Bin (Safe Archive)"
+                            >
+                              <Archive size={16} />
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              onClick={() => handleRestoreProduct(p.id, p.name)}
+                              className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-bold rounded border border-emerald-300 inline-flex items-center space-x-1 transition text-xs"
+                              title="Restore to Active Storefront"
+                            >
+                              <RotateCcw size={13} />
+                              <span>Restore</span>
+                            </button>
+                            <button
+                              onClick={() => openPermanentDeleteModal([p.id])}
+                              className="p-1 text-gray-400 hover:text-red-600 transition inline-block align-middle"
+                              title="Permanently Delete (Super Admin Only)"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
             </tbody>
           </table>
         </div>
@@ -881,6 +1129,195 @@ export const AdminProducts: React.FC = () => {
               >
                 {formSubmitting ? 'Saving Product...' : editingProduct ? 'Save Product Changes' : 'Publish Product'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Super Admin: Strictly Protected Permanent Delete Modal */}
+      {isPermanentModalOpen && (
+        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full overflow-hidden text-xs text-left animate-in fade-in zoom-in-95">
+            <div className="bg-red-700 text-white p-4 flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <ShieldAlert size={18} />
+                <h3 className="font-bold text-sm">Permanent Deletion Confirmation</h3>
+              </div>
+              <button
+                onClick={() => setIsPermanentModalOpen(false)}
+                className="text-red-200 hover:text-white"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleExecutePermanentDelete} className="p-5 space-y-4">
+              <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-red-900 space-y-1">
+                <div className="flex items-center space-x-1.5 font-bold text-red-800">
+                  <AlertTriangle size={15} />
+                  <span>CRITICAL WARNING</span>
+                </div>
+                <p className="text-[11px] leading-relaxed">
+                  You are about to permanently delete <strong>{permanentTargetIds.length}</strong> product(s) from the database. This action <strong>CANNOT</strong> be undone.
+                </p>
+                <p className="text-[10px] text-red-700 font-medium pt-1 border-t border-red-200">
+                  🛡️ <strong>Safety Rule:</strong> If any product is referenced in existing customer orders, permanent deletion will be strictly blocked to preserve order history and customer receipts.
+                </p>
+              </div>
+
+              <div>
+                <label className="block font-bold text-gray-800 mb-1">
+                  Type <span className="font-mono text-red-600 bg-red-50 px-1 py-0.5 rounded border border-red-200">DELETE PERMANENTLY</span> to confirm:
+                </label>
+                <input
+                  type="text"
+                  value={confirmPhrase}
+                  onChange={(e) => setConfirmPhrase(e.target.value)}
+                  placeholder="DELETE PERMANENTLY"
+                  className="w-full px-3 py-2 border border-gray-300 rounded text-xs font-mono focus:outline-none focus:ring-1 focus:ring-red-500"
+                  autoFocus
+                />
+              </div>
+
+              {permError && (
+                <div className="p-2.5 rounded bg-red-100 text-red-800 text-[11px] flex items-start space-x-1.5">
+                  <AlertCircle size={14} className="shrink-0 mt-0.5" />
+                  <span>{permError}</span>
+                </div>
+              )}
+
+              <div className="flex justify-end space-x-2 pt-2 border-t border-gray-100">
+                <button
+                  type="button"
+                  onClick={() => setIsPermanentModalOpen(false)}
+                  className="px-4 py-2 border border-gray-300 bg-white hover:bg-gray-100 rounded text-gray-700 font-semibold text-xs"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={confirmPhrase !== 'DELETE PERMANENTLY' || isPermDeleting}
+                  className="bg-red-600 hover:bg-red-700 text-white font-bold px-4 py-2 rounded text-xs transition disabled:opacity-40 disabled:cursor-not-allowed shadow-sm"
+                >
+                  {isPermDeleting ? 'Permanently Deleting...' : 'Confirm Permanent Deletion'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Catalog Audit & Selective Recovery Modal */}
+      {isRecoveryModalOpen && (
+        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full max-h-[90vh] flex flex-col overflow-hidden text-xs text-left animate-in fade-in zoom-in-95">
+            <div className="bg-gray-900 text-white p-4 flex items-center justify-between shrink-0">
+              <div className="flex items-center space-x-2">
+                <RefreshCw size={18} className="text-amber-400" />
+                <h3 className="font-bold text-sm">Catalog Audit & Selective Recovery</h3>
+              </div>
+              <button
+                onClick={() => setIsRecoveryModalOpen(false)}
+                className="text-gray-400 hover:text-white"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="p-5 overflow-y-auto space-y-4 flex-1">
+              <p className="text-gray-600 text-[11px]">
+                This audit inspects the database against the <strong>24 canonical VK Technology products</strong>. You can selectively restore archived products to the storefront or re-insert missing catalog products without overwriting any customer accounts or existing order records.
+              </p>
+
+              {/* Stats Grid */}
+              <div className="grid grid-cols-4 gap-3 text-center">
+                <div className="bg-gray-50 border border-gray-200 rounded-lg p-2.5">
+                  <span className="text-[10px] text-gray-500 font-bold block uppercase">Canonical</span>
+                  <span className="text-lg font-extrabold text-gray-900">{recoveryAudit?.totalCanonical || 24}</span>
+                </div>
+                <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-2.5">
+                  <span className="text-[10px] text-emerald-700 font-bold block uppercase">Active</span>
+                  <span className="text-lg font-extrabold text-emerald-800">{recoveryAudit?.activeCount || 0}</span>
+                </div>
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-2.5">
+                  <span className="text-[10px] text-amber-700 font-bold block uppercase">In Recycle Bin</span>
+                  <span className="text-lg font-extrabold text-amber-800">{recoveryAudit?.archivedCount || 0}</span>
+                </div>
+                <div className="bg-rose-50 border border-rose-200 rounded-lg p-2.5">
+                  <span className="text-[10px] text-rose-700 font-bold block uppercase">Missing from DB</span>
+                  <span className="text-lg font-extrabold text-rose-800">{recoveryAudit?.missingCount || 0}</span>
+                </div>
+              </div>
+
+              {recoveryMessage && (
+                <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-lg flex items-center space-x-2">
+                  <CheckCircle2 size={16} className="shrink-0 text-emerald-600" />
+                  <span className="font-semibold text-xs">{recoveryMessage}</span>
+                </div>
+              )}
+
+              {/* Product Audit Table */}
+              <div className="border border-gray-200 rounded-lg overflow-hidden">
+                <div className="max-h-64 overflow-y-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-gray-50 border-b border-gray-200 text-gray-600 font-bold text-[10px] uppercase">
+                      <tr>
+                        <th className="py-2 px-3">SKU</th>
+                        <th className="py-2 px-3">Product Name</th>
+                        <th className="py-2 px-3">Status</th>
+                        <th className="py-2 px-3 text-right">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100 font-mono text-[11px]">
+                      {recoveryAudit?.details?.map((item: any, idx: number) => (
+                        <tr key={idx} className="hover:bg-gray-50">
+                          <td className="py-2 px-3 font-bold text-gray-800">{item.sku}</td>
+                          <td className="py-2 px-3 text-gray-700 font-sans truncate max-w-xs">{item.name}</td>
+                          <td className="py-2 px-3">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                              item.status === 'ACTIVE'
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : item.status === 'ARCHIVED'
+                                ? 'bg-amber-100 text-amber-800'
+                                : 'bg-rose-100 text-rose-800'
+                            }`}>
+                              {item.status}
+                            </span>
+                          </td>
+                          <td className="py-2 px-3 text-right font-sans text-[10px] text-gray-500">
+                            {item.action === 'NONE_NEEDED' && <span className="text-emerald-700 font-medium">✓ Up to Date</span>}
+                            {item.action === 'CAN_RESTORE' && <span className="text-amber-700 font-bold">Will Restore</span>}
+                            {item.action === 'CAN_REINSERT' && <span className="text-rose-700 font-bold">Will Re-insert</span>}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-gray-50 px-6 py-3 border-t border-gray-200 flex justify-between items-center shrink-0">
+              <span className="text-[11px] text-gray-500">
+                Safe Recovery: Preserves all existing orders & users
+              </span>
+              <div className="space-x-2">
+                <button
+                  type="button"
+                  onClick={() => setIsRecoveryModalOpen(false)}
+                  className="px-4 py-2 border border-gray-300 bg-white hover:bg-gray-100 rounded text-gray-800 font-semibold text-xs"
+                >
+                  Close
+                </button>
+                <button
+                  type="button"
+                  disabled={isRecovering || (recoveryAudit?.missingCount === 0 && recoveryAudit?.archivedCount === 0)}
+                  onClick={handleExecuteSelectiveRecovery}
+                  className="bg-amber-400 hover:bg-amber-500 text-gray-950 font-bold px-4 py-2 rounded text-xs transition disabled:opacity-40 shadow-sm"
+                >
+                  {isRecovering ? 'Restoring Products...' : 'Execute Selective Recovery'}
+                </button>
+              </div>
             </div>
           </div>
         </div>

@@ -137,6 +137,7 @@ export function initDatabase() {
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
       version INTEGER NOT NULL DEFAULT 1,
+      deleted_at TEXT DEFAULT NULL,
       FOREIGN KEY(category_id) REFERENCES categories(id) ON DELETE RESTRICT
     );
 
@@ -392,12 +393,39 @@ export function initDatabase() {
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE CASCADE
     );
+
+    CREATE TABLE IF NOT EXISTS bulk_orders (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      institution_name TEXT NOT NULL,
+      contact_person TEXT NOT NULL,
+      email TEXT NOT NULL,
+      phone TEXT NOT NULL,
+      product_requirements TEXT NOT NULL,
+      quantity INTEGER DEFAULT 1,
+      gstin TEXT,
+      approval_status TEXT NOT NULL DEFAULT 'pending',
+      order_status TEXT NOT NULL DEFAULT 'inquiry',
+      quotation_amount REAL,
+      notes TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
   `);
 
   // Migrate columns if table already existed
   try { db.exec(`ALTER TABLE orders ADD COLUMN utr_number TEXT;`); } catch (e) {}
   try { db.exec(`ALTER TABLE orders ADD COLUMN payment_screenshot TEXT;`); } catch (e) {}
+  try { db.exec(`ALTER TABLE orders ADD COLUMN courier_name TEXT;`); } catch (e) {}
+  try { db.exec(`ALTER TABLE orders ADD COLUMN tracking_url TEXT;`); } catch (e) {}
   try { db.exec(`ALTER TABLE products ADD COLUMN version INTEGER NOT NULL DEFAULT 1;`); } catch (e) {}
+  try { db.exec(`ALTER TABLE products ADD COLUMN deleted_at TEXT DEFAULT NULL;`); } catch (e) {}
+  try { db.exec(`ALTER TABLE products ADD COLUMN video_url TEXT;`); } catch (e) {}
+  try { db.exec(`ALTER TABLE products ADD COLUMN datasheet_url TEXT;`); } catch (e) {}
+  try { db.exec(`ALTER TABLE products ADD COLUMN manual_url TEXT;`); } catch (e) {}
+  try { db.exec(`ALTER TABLE products ADD COLUMN code_download_url TEXT;`); } catch (e) {}
+  try { db.exec(`ALTER TABLE users ADD COLUMN is_blocked INTEGER NOT NULL DEFAULT 0;`); } catch (e) {}
+  try { db.exec(`ALTER TABLE users ADD COLUMN block_reason TEXT;`); } catch (e) {}
+  try { db.exec(`ALTER TABLE users ADD COLUMN two_factor_enabled INTEGER NOT NULL DEFAULT 0;`); } catch (e) {}
 
   seedInitialData();
   } catch (err) {
@@ -412,6 +440,23 @@ export function recordAuditLog(adminEmail: string, action: string, targetType: s
       INSERT INTO admin_audit_logs (admin_email, action, target_type, target_id, details, created_at)
       VALUES (?, ?, ?, ?, ?, datetime('now'))
     `).run(adminEmail, action, targetType, String(targetId), detailsStr);
+
+    try {
+      if (typeof require !== 'undefined') {
+        const mongoose = require('mongoose');
+        if (mongoose.connection && mongoose.connection.readyState === 1) {
+          mongoose.connection.collection('admin_logs').insertOne({
+            admin_email: adminEmail,
+            action,
+            resource_type: targetType,
+            resource_id: String(targetId),
+            details: detailsStr,
+            result: 'success',
+            timestamp: new Date()
+          }).catch(() => {});
+        }
+      }
+    } catch {}
   } catch (err) {
     console.warn('[AuditLog] Failed to record log:', err);
   }
@@ -686,14 +731,19 @@ function seedInitialData() {
   }
 }
 
-function seedProducts() {
-  try {
+export function getCanonicalProductsList() {
   const getCatIdBySlug = (slug: string): number => {
     const row = db.prepare('SELECT id FROM categories WHERE slug = ?').get(slug) as { id: number };
     return row?.id || 1;
   };
 
-  const productsData = [
+  return CANONICAL_PRODUCTS_DATA.map(prod => ({
+    ...prod,
+    category_id: getCatIdBySlug(prod.category_slug)
+  }));
+}
+
+export const CANONICAL_PRODUCTS_DATA = [
     // Arduino Boards and Kits
     {
       name: 'Arduino UNO R4 WiFi Development Board (Original Renesas RA4M1)',
@@ -1598,7 +1648,11 @@ function seedProducts() {
     }
   ];
 
-  const insertProduct = db.prepare(`
+export function seedProducts() {
+  try {
+    const productsData = getCanonicalProductsList();
+
+    const insertProduct = db.prepare(`
     INSERT INTO products (
       slug, name, sku, category_id, subcategory, short_description, description,
       regular_price, discounted_price, stock_quantity, brand, specifications_json,
@@ -1623,7 +1677,7 @@ function seedProducts() {
   `);
 
   for (const prod of productsData) {
-    const categoryId = getCatIdBySlug(prod.category_slug);
+    const categoryId = prod.category_id || 1;
     const result = insertProduct.run(
       prod.slug,
       prod.name,

@@ -3,7 +3,7 @@ import jwt from 'jsonwebtoken';
 import { config } from '../config.js';
 import { db } from '../database.js';
 
-export type UserRole = 'customer' | 'admin' | 'SUPER_ADMIN' | 'PRODUCT_MANAGER' | 'ORDER_MANAGER' | 'INVENTORY_MANAGER';
+export type UserRole = 'customer' | 'CUSTOMER' | 'admin' | 'OWNER' | 'SUPER_ADMIN' | 'PRODUCT_MANAGER' | 'ORDER_MANAGER' | 'INVENTORY_MANAGER';
 
 export interface AuthUser {
   id: number;
@@ -48,7 +48,7 @@ export function authenticateToken(req: AuthenticatedRequest, res: Response, next
   });
 }
 
-const ALL_ADMIN_ROLES: string[] = ['admin', 'SUPER_ADMIN', 'PRODUCT_MANAGER', 'ORDER_MANAGER', 'INVENTORY_MANAGER'];
+const ALL_ADMIN_ROLES: string[] = ['admin', 'OWNER', 'SUPER_ADMIN', 'PRODUCT_MANAGER', 'ORDER_MANAGER', 'INVENTORY_MANAGER'];
 
 export function requireAdmin(req: AuthenticatedRequest, res: Response, next: NextFunction): void {
   if (!req.user) {

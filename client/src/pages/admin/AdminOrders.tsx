@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import {
   ShoppingBag,
   Search,
@@ -25,7 +26,10 @@ const ORDER_STATUSES = [
   'Packed',
   'Shipped',
   'Out for Delivery',
-  'Delivered'
+  'Delivered',
+  'Cancelled',
+  'Return Requested',
+  'Refunded'
 ];
 
 export const AdminOrders: React.FC = () => {
@@ -215,14 +219,12 @@ export const AdminOrders: React.FC = () => {
                     >
                       Update Status
                     </button>
-                    <a
-                      href={`/orders/${ord.id}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-vk-blue hover:underline font-semibold"
+                    <Link
+                      to="/admin/invoices"
+                      className="text-vk-blue hover:underline font-bold text-[11px] inline-flex items-center"
                     >
-                      Invoice
-                    </a>
+                      Tax Invoice
+                    </Link>
                   </td>
                 </tr>
               ))}

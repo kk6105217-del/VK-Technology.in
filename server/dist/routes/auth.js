@@ -117,7 +117,7 @@ exports.authRouter.post('/login', (req, res) => {
         ensureUsersTable();
         let user = null;
         try {
-            user = database_js_1.db.prepare('SELECT id, email, password_hash, full_name, phone, role FROM users WHERE email = ?').get(cleanEmail);
+            user = database_js_1.db.prepare('SELECT id, email, password_hash, full_name, phone, role, is_blocked, block_reason FROM users WHERE email = ?').get(cleanEmail);
         }
         catch (e) {
             user = memoryUsersStore.get(cleanEmail);
@@ -127,6 +127,10 @@ exports.authRouter.post('/login', (req, res) => {
         }
         if (!user) {
             res.status(401).json({ error: 'Invalid email or password.' });
+            return;
+        }
+        if (user.is_blocked) {
+            res.status(403).json({ error: user.block_reason || 'Your customer account has been suspended by administration. Please contact support@vktechnology.shop.' });
             return;
         }
         const isMatch = bcryptjs_1.default.compareSync(password, user.password_hash) ||
@@ -222,6 +226,20 @@ exports.authRouter.post('/admin-login', (req, res) => {
     catch (error) {
         console.error('Admin login error:', error);
         res.status(500).json({ error: 'Admin authentication failed.' });
+    }
+});
+// Logout endpoint for both admin and customer accounts
+exports.authRouter.post('/logout', (req, res) => {
+    try {
+        const authHeader = req.headers['authorization'];
+        const token = authHeader && authHeader.split(' ')[1];
+        if (req.user?.email) {
+            (0, database_js_1.recordAuditLog)(req.user.email, 'USER_LOGOUT', 'User', req.user.id || 0, { email: req.user.email, role: req.user.role });
+        }
+        res.json({ message: 'Successfully logged out.', timestamp: new Date().toISOString() });
+    }
+    catch (error) {
+        res.status(500).json({ error: 'Failed to complete logout.' });
     }
 });
 // Current user details

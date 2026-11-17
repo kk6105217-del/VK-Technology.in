@@ -2,7 +2,7 @@ import { Router, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
-import { db } from '../database.js';
+import { db, recordAuditLog } from '../database.js';
 import { config } from '../config.js';
 import { authenticateToken, requireAdmin, AuthenticatedRequest } from '../middleware/auth.js';
 
@@ -141,7 +141,7 @@ authRouter.post('/login', (req, res) => {
 
     let user: any = null;
     try {
-      user = db.prepare('SELECT id, email, password_hash, full_name, phone, role FROM users WHERE email = ?').get(cleanEmail);
+      user = db.prepare('SELECT id, email, password_hash, full_name, phone, role, is_blocked, block_reason FROM users WHERE email = ?').get(cleanEmail);
     } catch (e) {
       user = memoryUsersStore.get(cleanEmail);
     }
@@ -151,6 +151,11 @@ authRouter.post('/login', (req, res) => {
 
     if (!user) {
       res.status(401).json({ error: 'Invalid email or password.' });
+      return;
+    }
+
+    if (user.is_blocked) {
+      res.status(403).json({ error: user.block_reason || 'Your customer account has been suspended by administration. Please contact support@vktechnology.shop.' });
       return;
     }
 
@@ -268,6 +273,26 @@ authRouter.post('/admin-login', (req, res) => {
   } catch (error: any) {
     console.error('Admin login error:', error);
     res.status(500).json({ error: 'Admin authentication failed.' });
+  }
+});
+
+// Logout endpoint for both admin and customer accounts
+authRouter.post('/logout', (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader && authHeader.split(' ')[1];
+    if (req.user?.email) {
+      recordAuditLog(
+        req.user.email,
+        'USER_LOGOUT',
+        'User',
+        req.user.id || 0,
+        { email: req.user.email, role: req.user.role }
+      );
+    }
+    res.json({ message: 'Successfully logged out.', timestamp: new Date().toISOString() });
+  } catch (error: any) {
+    res.status(500).json({ error: 'Failed to complete logout.' });
   }
 });
 
