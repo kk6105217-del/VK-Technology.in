@@ -88,7 +88,7 @@ function requireRole(allowedRoles) {
         });
     };
 }
-exports.requireSuperAdmin = requireRole(['SUPER_ADMIN']);
+exports.requireSuperAdmin = requireRole(['SUPER_ADMIN', 'OWNER', 'admin']);
 exports.requireProductManager = requireRole(['PRODUCT_MANAGER', 'SUPER_ADMIN']);
 exports.requireOrderManager = requireRole(['ORDER_MANAGER', 'SUPER_ADMIN']);
 exports.requireInventoryManager = requireRole(['INVENTORY_MANAGER', 'SUPER_ADMIN']);

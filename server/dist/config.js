@@ -23,18 +23,26 @@ exports.config = {
     // Razorpay
     razorpayKeyId: process.env.RAZORPAY_KEY_ID || '',
     razorpayKeySecret: process.env.RAZORPAY_KEY_SECRET || '',
-    // Email Notifications (Resend / SMTP)
+    // Email Notifications (Nodemailer SMTP / Resend)
+    storeOwnerEmail: process.env.STORE_OWNER_EMAIL || process.env.ADMIN_EMAIL || 'karthik.suroju@gmail.com',
     resendApiKey: process.env.RESEND_API_KEY || '',
     smtpHost: process.env.SMTP_HOST || '',
     smtpPort: parseInt(process.env.SMTP_PORT || '587', 10),
     smtpUser: process.env.SMTP_USER || '',
     smtpPass: process.env.SMTP_PASS || '',
-    emailFrom: process.env.EMAIL_FROM || 'VK Technology <orders@vktechnology.in>',
-    // WhatsApp Integration
-    whatsappApiToken: process.env.WHATSAPP_API_TOKEN || '',
-    whatsappPhoneId: process.env.WHATSAPP_PHONE_ID || '',
+    emailFrom: process.env.EMAIL_FROM || 'VK Technology <karthik.suroju@gmail.com>',
+    // WhatsApp Integration (Meta WhatsApp Business Cloud API)
+    whatsappAccessToken: process.env.WHATSAPP_ACCESS_TOKEN || process.env.WHATSAPP_API_TOKEN || '',
+    whatsappPhoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID || process.env.WHATSAPP_PHONE_ID || '',
+    whatsappBusinessAccountId: process.env.WHATSAPP_BUSINESS_ACCOUNT_ID || '',
+    whatsappApiVersion: process.env.WHATSAPP_API_VERSION || 'v21.0',
+    whatsappOwnerNumber: process.env.WHATSAPP_OWNER_NUMBER || process.env.OWNER_WHATSAPP_NUMBER || '918555997052',
+    whatsappOwnerTemplate: process.env.WHATSAPP_OWNER_TEMPLATE || 'vk_new_order_owner',
+    whatsappCustomerTemplate: process.env.WHATSAPP_CUSTOMER_TEMPLATE || 'vk_order_confirmation',
+    whatsappApiToken: process.env.WHATSAPP_ACCESS_TOKEN || process.env.WHATSAPP_API_TOKEN || '',
+    whatsappPhoneId: process.env.WHATSAPP_PHONE_NUMBER_ID || process.env.WHATSAPP_PHONE_ID || '',
     whatsappBusinessPhone: process.env.WHATSAPP_BUSINESS_PHONE || '+91 8555997052',
-    ownerWhatsappNumber: process.env.OWNER_WHATSAPP_NUMBER || '+91 8555997052',
+    ownerWhatsappNumber: process.env.WHATSAPP_OWNER_NUMBER || process.env.OWNER_WHATSAPP_NUMBER || '918555997052',
     // Internal Vercel Service Bindings
     backendServiceUrl: process.env.BACKEND_SERVICE_URL || 'http://localhost:8000',
 };

@@ -104,8 +104,9 @@ const handleApprovePayment = async (req, res) => {
       INSERT INTO admin_audit_logs (admin_email, action, target_type, target_id, details)
       VALUES (?, 'approve_upi_payment', 'upi_payment', ?, ?)
     `).run(adminEmail, String(paymentId), `Approved UPI payment for order #${payment.order_number} (Amount: ₹${payment.amount}, UTR: ${payment.utr_number})`);
-        // 4. Notify customer of verification
+        // 4. Notify customer of verification and dispatch confirmed order notifications
         await (0, notifications_js_1.sendOrderStatusUpdate)(payment.order_id, 'Payment Verified & Confirmed');
+        (0, notifications_js_1.dispatchOrderNotifications)(payment.order_id).catch(e => console.warn('[UPI Notification Dispatch Warning]:', e.message));
         res.json({ message: 'UPI payment successfully verified and marked as Paid.' });
     }
     catch (error) {

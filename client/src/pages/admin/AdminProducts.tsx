@@ -79,6 +79,7 @@ export const AdminProducts: React.FC = () => {
   const [confirmPhrase, setConfirmPhrase] = useState('');
   const [isPermDeleting, setIsPermDeleting] = useState(false);
   const [permError, setPermError] = useState('');
+  const [isClearingDemo, setIsClearingDemo] = useState(false);
 
   // Catalog Audit & Selective Recovery Modal
   const [isRecoveryModalOpen, setIsRecoveryModalOpen] = useState(false);
@@ -174,11 +175,19 @@ export const AdminProducts: React.FC = () => {
       const { id, stock_quantity } = event.data;
       setProducts(prev => prev.map(p => p.id === Number(id) ? { ...p, stock_quantity: Number(stock_quantity) } : p));
       loadData(false);
-    } else if (event.type === 'PRODUCT_DELETED') {
-      const delId = Number(event.data?.id || (event.data?.archivedIds && event.data.archivedIds[0]));
-      if (delId) {
-        setProducts(prev => prev.filter(p => p.id !== delId));
+    } else if (event.type === 'PRODUCT_DELETED' || event.type === 'PRODUCT_PERMANENTLY_DELETED') {
+      const rawIds = event.data?.deletedIds || event.data?.archivedIds || event.data?.ids || (event.data?.id ? [event.data.id] : []);
+      const delIds = rawIds.map(Number).filter(Boolean);
+      if (delIds.length > 0) {
+        setProducts(prev => prev.filter(p => !delIds.includes(p.id)));
+        setRecycleBinProducts(prev => prev.filter(p => !delIds.includes(p.id)));
       }
+      try {
+        localStorage.removeItem('vk_admin_products_cache');
+        if (event.data?.clearDemo) {
+          localStorage.setItem('vk_demo_cleared', 'true');
+        }
+      } catch {}
       loadData(false);
     } else {
       loadData(false);
@@ -554,6 +563,28 @@ export const AdminProducts: React.FC = () => {
     }
   };
 
+  // Remove All 24 Demo Products (Preserves real custom products)
+  const handleClearDemoProducts = async () => {
+    if (!window.confirm('Are you sure you want to remove all 24 initial demo/sample products from the store?\n\nYour custom products (like "Smart car") will remain active and completely untouched.')) {
+      return;
+    }
+
+    try {
+      setIsClearingDemo(true);
+      const res = await api.products.clearDemoProducts();
+      showToast(res.message || 'Successfully removed all demo products.', 'success');
+      try {
+        localStorage.setItem('vk_demo_cleared', 'true');
+        localStorage.removeItem('vk_admin_products_cache');
+      } catch {}
+      await loadData(false);
+    } catch (err: any) {
+      showToast(err.message || 'Failed to clear demo products.', 'error');
+    } finally {
+      setIsClearingDemo(false);
+    }
+  };
+
   // Catalog Audit & Selective Recovery
   const handleOpenAuditModal = async () => {
     try {
@@ -616,6 +647,15 @@ export const AdminProducts: React.FC = () => {
           </p>
         </div>
         <div className="flex items-center space-x-2">
+          <button
+            onClick={handleClearDemoProducts}
+            disabled={isClearingDemo}
+            className="border border-red-200 hover:border-red-300 bg-red-50 hover:bg-red-100 text-red-700 font-bold px-3 py-2 rounded text-xs shadow-sm flex items-center space-x-1.5 transition disabled:opacity-50"
+            title="Remove 24 sample demo products and keep only real custom products"
+          >
+            <Trash2 size={14} className="text-red-500" />
+            <span>{isClearingDemo ? 'Clearing...' : 'Remove Demo Products'}</span>
+          </button>
           <button
             onClick={() => {
               if (selectedProductIds.length === filteredProducts.length && filteredProducts.length > 0) {
@@ -684,12 +724,12 @@ export const AdminProducts: React.FC = () => {
         <div className="flex-1" />
 
         <button
-          onClick={handleOpenAuditModal}
+          onClick={() => loadData(true)}
           className="pb-2 text-xs font-semibold text-gray-600 hover:text-indigo-600 flex items-center space-x-1.5 transition px-2"
-          title="Audit and recover canonical catalog products"
+          title="Refresh and synchronize catalog across servers"
         >
-          <RefreshCw size={13} className={isAuditing ? 'animate-spin' : ''} />
-          <span>Audit Catalog (24 Products)</span>
+          <RefreshCw size={13} className={isLoading ? 'animate-spin' : ''} />
+          <span>Sync Catalog</span>
         </button>
       </div>
 
@@ -738,6 +778,15 @@ export const AdminProducts: React.FC = () => {
                 >
                   <Archive size={13} />
                   <span>Archive Selected ({selectedProductIds.length})</span>
+                </button>
+                <button
+                  disabled={isBulkOperating}
+                  onClick={() => openPermanentDeleteModal(selectedProductIds)}
+                  className="bg-red-600 hover:bg-red-700 text-white font-bold px-3 py-1.5 rounded text-xs shadow flex items-center space-x-1 transition disabled:opacity-50"
+                  title="Permanently remove selected products"
+                >
+                  <Trash2 size={13} />
+                  <span>Delete Selected ({selectedProductIds.length})</span>
                 </button>
               </>
             ) : (
@@ -977,6 +1026,13 @@ export const AdminProducts: React.FC = () => {
                               title="Move to Recycle Bin (Safe Archive)"
                             >
                               <Archive size={16} />
+                            </button>
+                            <button
+                              onClick={() => openPermanentDeleteModal([p.id])}
+                              className="p-1 text-gray-400 hover:text-red-600 transition"
+                              title="Delete Permanently"
+                            >
+                              <Trash2 size={16} />
                             </button>
                           </>
                         ) : (

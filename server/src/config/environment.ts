@@ -28,7 +28,8 @@ export interface EnvironmentConfig {
   razorpayKeyId: string;
   razorpayKeySecret: string;
 
-  // Notification Integrations
+  // Notification Integrations (Email & WhatsApp Business API)
+  storeOwnerEmail: string;
   resendApiKey: string;
   smtpHost: string;
   smtpPort: number;
@@ -36,7 +37,14 @@ export interface EnvironmentConfig {
   smtpPass: string;
   emailFrom: string;
 
-  // WhatsApp
+  // WhatsApp Meta Cloud API
+  whatsappAccessToken: string;
+  whatsappPhoneNumberId: string;
+  whatsappBusinessAccountId: string;
+  whatsappApiVersion: string;
+  whatsappOwnerNumber: string;
+  whatsappOwnerTemplate: string;
+  whatsappCustomerTemplate: string;
   whatsappApiToken: string;
   whatsappPhoneId: string;
   whatsappBusinessPhone: string;
@@ -76,17 +84,26 @@ export const env: EnvironmentConfig = {
   razorpayKeyId: process.env.RAZORPAY_KEY_ID || '',
   razorpayKeySecret: process.env.RAZORPAY_KEY_SECRET || '',
 
+  storeOwnerEmail: process.env.STORE_OWNER_EMAIL || process.env.ADMIN_EMAIL || 'karthik.suroju@gmail.com',
   resendApiKey: process.env.RESEND_API_KEY || '',
   smtpHost: process.env.SMTP_HOST || '',
   smtpPort: parseInt(process.env.SMTP_PORT || '587', 10),
   smtpUser: process.env.SMTP_USER || '',
   smtpPass: process.env.SMTP_PASS || '',
-  emailFrom: process.env.EMAIL_FROM || 'VK Technology <orders@vktechnology.in>',
+  emailFrom: process.env.EMAIL_FROM || 'VK Technology <karthik.suroju@gmail.com>',
 
-  whatsappApiToken: process.env.WHATSAPP_API_TOKEN || '',
-  whatsappPhoneId: process.env.WHATSAPP_PHONE_ID || '',
+  // WhatsApp Meta Cloud API
+  whatsappAccessToken: process.env.WHATSAPP_ACCESS_TOKEN || process.env.WHATSAPP_API_TOKEN || '',
+  whatsappPhoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID || process.env.WHATSAPP_PHONE_ID || '',
+  whatsappBusinessAccountId: process.env.WHATSAPP_BUSINESS_ACCOUNT_ID || '',
+  whatsappApiVersion: process.env.WHATSAPP_API_VERSION || 'v21.0',
+  whatsappOwnerNumber: process.env.WHATSAPP_OWNER_NUMBER || process.env.OWNER_WHATSAPP_NUMBER || '918555997052',
+  whatsappOwnerTemplate: process.env.WHATSAPP_OWNER_TEMPLATE || 'vk_new_order_owner',
+  whatsappCustomerTemplate: process.env.WHATSAPP_CUSTOMER_TEMPLATE || 'vk_order_confirmation',
+  whatsappApiToken: process.env.WHATSAPP_ACCESS_TOKEN || process.env.WHATSAPP_API_TOKEN || '',
+  whatsappPhoneId: process.env.WHATSAPP_PHONE_NUMBER_ID || process.env.WHATSAPP_PHONE_ID || '',
   whatsappBusinessPhone: process.env.WHATSAPP_BUSINESS_PHONE || '+91 8555997052',
-  ownerWhatsappNumber: process.env.OWNER_WHATSAPP_NUMBER || '+91 8555997052',
+  ownerWhatsappNumber: process.env.WHATSAPP_OWNER_NUMBER || process.env.OWNER_WHATSAPP_NUMBER || '918555997052',
 
   rateLimitWindowMs: 15 * 60 * 1000, // 15 minutes
   rateLimitMaxRequests: 300,

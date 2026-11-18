@@ -2,8 +2,17 @@ import { Router, Response, Request } from 'express';
 import crypto from 'crypto';
 import { db } from '../database.js';
 import { config } from '../config.js';
+import { PaymentService } from '../services/paymentService.js';
 import { authenticateToken, requireAdmin, optionalToken, AuthenticatedRequest } from '../middleware/auth.js';
-import { sendOrderNotifications, sendOrderStatusUpdate, retryNotification } from '../services/notifications.js';
+import {
+  sendOrderNotifications,
+  sendOrderStatusUpdate,
+  retryNotification,
+  dispatchOrderNotifications,
+  generateOwnerWhatsAppLink,
+  generateCustomerWhatsAppLink,
+  resolveOrderData
+} from '../services/notifications.js';
 
 export const ordersRouter = Router();
 
@@ -333,13 +342,14 @@ ordersRouter.post('/verify-payment', optionalToken, async (req: Request, res: Re
       return;
     }
 
-    // Verify signature if real Razorpay credentials are used
-    if (!is_mock && config.razorpayKeySecret) {
-      const hmac = crypto.createHmac('sha256', config.razorpayKeySecret);
-      hmac.update(`${razorpay_order_id}|${razorpay_payment_id}`);
-      const generatedSignature = hmac.digest('hex');
-
-      if (generatedSignature !== razorpay_signature) {
+    // Verify signature using unified PaymentService
+    if (!is_mock) {
+      const isValid = PaymentService.verifyRazorpaySignature(
+        razorpay_order_id,
+        razorpay_payment_id,
+        razorpay_signature
+      );
+      if (!isValid) {
         res.status(400).json({ error: 'Payment signature verification failed. Transaction was not verified.' });
         return;
       }
@@ -459,6 +469,90 @@ ordersRouter.get('/track/:orderNumber', (req, res) => {
     });
   } catch (error: any) {
     res.status(500).json({ error: 'Failed to track order.' });
+  }
+});
+
+// Admin: Get multi-channel notification status & delivery history for an order
+ordersRouter.get('/admin/:id/notifications', authenticateToken, requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const orderId = Number(req.params.id);
+    const order = await resolveOrderData(orderId);
+    if (!order) {
+      res.status(404).json({ error: 'Order not found.' });
+      return;
+    }
+
+    const sqliteOrder = db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId) as any;
+    const logs = db.prepare('SELECT * FROM notification_logs WHERE order_id = ? ORDER BY id DESC').all(orderId);
+
+    const ownerWhatsAppLink = generateOwnerWhatsAppLink(order);
+    const customerWhatsAppLink = generateCustomerWhatsAppLink(order);
+
+    res.json({
+      orderId,
+      orderNumber: order.orderNumber,
+      channels: {
+        ownerEmail: {
+          recipient: 'karthik.suroju@gmail.com',
+          status: sqliteOrder?.owner_email_status || 'PENDING',
+        },
+        ownerWhatsApp: {
+          recipient: '+91 8555997052',
+          status: sqliteOrder?.owner_whatsapp_status || 'PENDING',
+          directLink: ownerWhatsAppLink,
+        },
+        customerEmail: {
+          recipient: order.customerEmail,
+          status: sqliteOrder?.customer_email_status || 'PENDING',
+        },
+        customerWhatsApp: {
+          recipient: order.customerPhone,
+          status: sqliteOrder?.customer_whatsapp_status || 'PENDING',
+          directLink: customerWhatsAppLink,
+        },
+      },
+      notificationSentAt: sqliteOrder?.notification_sent_at || null,
+      notificationError: sqliteOrder?.notification_error || null,
+      retryCount: sqliteOrder?.retry_count || 0,
+      whatsappMessageId: sqliteOrder?.whatsapp_message_id || null,
+      logs,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: 'Failed to fetch notification details: ' + error.message });
+  }
+});
+
+// Admin: Retry failed notifications (individual channel or all failed)
+ordersRouter.post('/admin/:id/retry-notification', authenticateToken, requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const orderId = Number(req.params.id);
+    const { channel, log_id } = req.body || {};
+
+    if (log_id) {
+      const result = await retryNotification(Number(log_id));
+      return res.json(result);
+    }
+
+    // Determine target channels
+    let forceChannels: Array<'owner_email' | 'owner_whatsapp' | 'customer_email' | 'customer_whatsapp'> = [];
+    if (channel && channel !== 'all') {
+      forceChannels = [channel];
+    }
+
+    // Increment retry count
+    try {
+      db.prepare('UPDATE orders SET retry_count = COALESCE(retry_count, 0) + 1 WHERE id = ?').run(orderId);
+    } catch {}
+
+    const dispatch = await dispatchOrderNotifications(orderId, { forceChannels });
+
+    res.json({
+      success: true,
+      message: 'Notification retry triggered successfully.',
+      dispatch,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: 'Failed to retry notification: ' + error.message });
   }
 });
 
@@ -725,31 +819,6 @@ ordersRouter.patch('/admin/:id/status', authenticateToken, requireAdmin, handleO
 ordersRouter.patch('/:id/status', authenticateToken, requireAdmin, handleOrderStatusUpdate);
 ordersRouter.put('/admin/:id/status', authenticateToken, requireAdmin, handleOrderStatusUpdate);
 ordersRouter.put('/:id/status', authenticateToken, requireAdmin, handleOrderStatusUpdate);
-
-// Admin: Get notification delivery logs for an order
-ordersRouter.get('/admin/:id/notifications', authenticateToken, requireAdmin, (req: AuthenticatedRequest, res: Response) => {
-  try {
-    const logs = db.prepare('SELECT * FROM notification_logs WHERE order_id = ? ORDER BY id DESC').all(req.params.id);
-    res.json({ logs });
-  } catch (error: any) {
-    res.status(500).json({ error: 'Failed to fetch notification logs.' });
-  }
-});
-
-// Admin: Retry a failed notification
-ordersRouter.post('/admin/:id/retry-notification', authenticateToken, requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
-  try {
-    const { log_id } = req.body;
-    const result = await retryNotification(Number(log_id));
-    if (result.success) {
-      res.json({ message: result.message });
-    } else {
-      res.status(400).json({ error: result.message });
-    }
-  } catch (error: any) {
-    res.status(500).json({ error: 'Failed to retry notification.' });
-  }
-});
 
 // Admin: Export Orders to CSV
 ordersRouter.get('/admin/export/csv', authenticateToken, requireAdmin, (req: AuthenticatedRequest, res: Response) => {

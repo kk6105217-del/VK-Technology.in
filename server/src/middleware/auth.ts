@@ -109,7 +109,7 @@ export function requireRole(allowedRoles: string[]) {
   };
 }
 
-export const requireSuperAdmin = requireRole(['SUPER_ADMIN']);
+export const requireSuperAdmin = requireRole(['SUPER_ADMIN', 'OWNER', 'admin']);
 export const requireProductManager = requireRole(['PRODUCT_MANAGER', 'SUPER_ADMIN']);
 export const requireOrderManager = requireRole(['ORDER_MANAGER', 'SUPER_ADMIN']);
 export const requireInventoryManager = requireRole(['INVENTORY_MANAGER', 'SUPER_ADMIN']);

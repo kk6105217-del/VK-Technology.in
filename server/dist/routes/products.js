@@ -49,17 +49,32 @@ async function syncProductToMongo(prod) {
         console.warn('[MongoSync] Failed to sync product to MongoDB Atlas:', err);
     }
 }
-async function syncArchiveProductToMongo(idOrIds, isArchived, isActive = false) {
+async function syncArchiveProductToMongo(idOrIds, isArchived, isActive = false, skus) {
     if (!(0, database_js_2.isMongoConnected)())
         return;
     try {
         const ids = (Array.isArray(idOrIds) ? idOrIds : [idOrIds]).map(Number).filter(n => !isNaN(n));
-        await Product_js_1.Product.updateMany({ id: { $in: ids } }, {
-            $set: {
-                deleted_at: isArchived ? new Date() : null,
-                is_active: isActive
+        let querySkus = Array.isArray(skus) ? skus : [];
+        if (querySkus.length === 0 && ids.length > 0) {
+            try {
+                const rows = database_js_1.db.prepare(`SELECT sku FROM products WHERE id IN (${ids.map(() => '?').join(',')})`).all(...ids);
+                querySkus = rows.map(r => r.sku).filter(Boolean);
             }
-        }, { runValidators: true });
+            catch { }
+        }
+        const filterClauses = [];
+        if (ids.length > 0)
+            filterClauses.push({ id: { $in: ids } });
+        if (querySkus.length > 0)
+            filterClauses.push({ sku: { $in: querySkus } });
+        if (filterClauses.length > 0) {
+            await Product_js_1.Product.updateMany({ $or: filterClauses }, {
+                $set: {
+                    deleted_at: isArchived ? new Date() : null,
+                    is_active: isActive
+                }
+            });
+        }
     }
     catch (err) {
         console.warn('[MongoSync] Failed to sync archive state to MongoDB Atlas:', err);
@@ -86,12 +101,27 @@ async function syncStatusToMongo(idOrIds, isActive) {
         console.warn('[MongoSync] Failed to sync status to MongoDB Atlas:', err);
     }
 }
-async function syncPermanentDeleteToMongo(ids) {
+async function syncPermanentDeleteToMongo(ids, skus) {
     if (!(0, database_js_2.isMongoConnected)())
         return;
     try {
         const validIds = ids.map(Number).filter(n => !isNaN(n));
-        await Product_js_1.Product.deleteMany({ id: { $in: validIds } });
+        let querySkus = Array.isArray(skus) ? skus : [];
+        if (querySkus.length === 0 && validIds.length > 0) {
+            try {
+                const rows = database_js_1.db.prepare(`SELECT sku FROM products WHERE id IN (${validIds.map(() => '?').join(',')})`).all(...validIds);
+                querySkus = rows.map(r => r.sku).filter(Boolean);
+            }
+            catch { }
+        }
+        const filterClauses = [];
+        if (validIds.length > 0)
+            filterClauses.push({ id: { $in: validIds } });
+        if (querySkus.length > 0)
+            filterClauses.push({ sku: { $in: querySkus } });
+        if (filterClauses.length > 0) {
+            await Product_js_1.Product.deleteMany({ $or: filterClauses });
+        }
     }
     catch (err) {
         console.warn('[MongoSync] Failed to sync permanent deletion to MongoDB Atlas:', err);
@@ -166,11 +196,12 @@ async function syncFromMongoMaster() {
             return;
         // 1. Delete SQLite products that are not present in Mongo
         const mongoIds = new Set(mongoProducts.map((p) => p.id));
-        const sqliteProducts = database_js_1.db.prepare('SELECT id FROM products').all();
+        const mongoSkus = new Set(mongoProducts.map((p) => p.sku));
+        const sqliteProducts = database_js_1.db.prepare('SELECT id, sku FROM products').all();
         const delImg = database_js_1.db.prepare('DELETE FROM product_images WHERE product_id = ?');
         const delProd = database_js_1.db.prepare('DELETE FROM products WHERE id = ?');
         for (const sp of sqliteProducts) {
-            if (!mongoIds.has(sp.id)) {
+            if (!mongoIds.has(sp.id) && !mongoSkus.has(sp.sku)) {
                 delImg.run(sp.id);
                 delProd.run(sp.id);
             }
@@ -1398,6 +1429,77 @@ exports.productsRouter.post('/admin/permanent-delete', auth_js_1.authenticateTok
     catch (error) {
         console.error('Permanent delete products error:', error);
         res.status(500).json({ error: error.message || 'Failed to permanently delete products.' });
+    }
+});
+// Admin: Remove All Demo/Sample Products (Permanently cleans initial demo catalog, leaving custom products intact)
+exports.productsRouter.post('/admin/clear-demo-products', auth_js_1.authenticateToken, auth_js_1.requireAdmin, async (req, res) => {
+    try {
+        const canonicalProducts = (0, database_js_1.getCanonicalProductsList)();
+        const demoSkus = canonicalProducts.map(p => p.sku);
+        // Identify matching demo products in SQLite
+        const placeholders = demoSkus.map(() => '?').join(',');
+        const matchingRows = database_js_1.db.prepare(`SELECT id, name, sku FROM products WHERE sku IN (${placeholders})`).all(...demoSkus);
+        const matchingIds = matchingRows.map(r => r.id);
+        database_js_1.db.exec('BEGIN TRANSACTION');
+        try {
+            if (matchingIds.length > 0) {
+                const idPlaceholders = matchingIds.map(() => '?').join(',');
+                database_js_1.db.prepare(`DELETE FROM product_images WHERE product_id IN (${idPlaceholders})`).run(...matchingIds);
+                database_js_1.db.prepare(`DELETE FROM cart_items WHERE product_id IN (${idPlaceholders})`).run(...matchingIds);
+                database_js_1.db.prepare(`DELETE FROM wishlists WHERE product_id IN (${idPlaceholders})`).run(...matchingIds);
+                database_js_1.db.prepare(`DELETE FROM reviews WHERE product_id IN (${idPlaceholders})`).run(...matchingIds);
+                database_js_1.db.prepare(`DELETE FROM products WHERE id IN (${idPlaceholders})`).run(...matchingIds);
+            }
+            // Mark settings so demo products are never re-seeded
+            database_js_1.db.prepare("INSERT OR REPLACE INTO website_settings (key, value) VALUES ('demo_products_cleared', 'true')").run();
+            database_js_1.db.prepare("INSERT OR REPLACE INTO website_settings (key, value) VALUES ('catalog_seeded', 'true')").run();
+            (0, database_js_1.recordAuditLog)(req.user?.email || 'admin@vktechnology.shop', 'CLEAR_DEMO_PRODUCTS', 'Products', matchingIds.join(','), { clearedCount: matchingIds.length, clearedSkus: demoSkus });
+            database_js_1.db.exec('COMMIT');
+        }
+        catch (txErr) {
+            try {
+                database_js_1.db.exec('ROLLBACK');
+            }
+            catch { }
+            throw txErr;
+        }
+        // Delete demo products from MongoDB Atlas
+        if ((0, database_js_2.isMongoConnected)()) {
+            try {
+                await Product_js_1.Product.deleteMany({
+                    $or: [
+                        { sku: { $in: demoSkus } },
+                        { id: { $in: matchingIds } }
+                    ]
+                });
+            }
+            catch (mErr) {
+                console.warn('[MongoSync] Clear demo products mongo error:', mErr.message);
+            }
+        }
+        // Broadcast live event to all connected clients
+        try {
+            events_js_1.eventBroadcaster.broadcast('PRODUCT_DELETED', {
+                count: matchingIds.length,
+                deletedIds: matchingIds,
+                archivedIds: matchingIds,
+                ids: matchingIds,
+                clearDemo: true
+            });
+        }
+        catch { }
+        const remainingRows = database_js_1.db.prepare('SELECT id, name, sku FROM products WHERE deleted_at IS NULL').all();
+        res.json({
+            success: true,
+            message: `Successfully removed ${matchingIds.length} demo products. Your custom product(s) remain active.`,
+            clearedCount: matchingIds.length,
+            remainingCount: remainingRows.length,
+            remainingProducts: remainingRows
+        });
+    }
+    catch (error) {
+        console.error('Clear demo products error:', error);
+        res.status(500).json({ error: error.message || 'Failed to clear demo products.' });
     }
 });
 // Admin: Selective Recovery and Inspection for Missing Catalog Products

@@ -105,6 +105,36 @@ const OrderSchema = new mongoose_1.Schema({
         events: { type: [TrackingEventSchema], default: [] },
     },
     admin_notes: { type: String },
+    // Automated Order Notification Tracking
+    ownerEmailStatus: {
+        type: String,
+        enum: ['PENDING', 'SENT', 'FAILED'],
+        default: 'PENDING',
+        index: true,
+    },
+    ownerWhatsAppStatus: {
+        type: String,
+        enum: ['PENDING', 'SENT', 'FAILED'],
+        default: 'PENDING',
+        index: true,
+    },
+    customerEmailStatus: {
+        type: String,
+        enum: ['PENDING', 'SENT', 'FAILED'],
+        default: 'PENDING',
+        index: true,
+    },
+    customerWhatsAppStatus: {
+        type: String,
+        enum: ['PENDING', 'SENT', 'FAILED'],
+        default: 'PENDING',
+        index: true,
+    },
+    notificationSentAt: { type: Date, default: null },
+    notificationError: { type: String, default: null },
+    retryCount: { type: Number, default: 0 },
+    whatsappMessageId: { type: String, default: null },
+    whatsappConsent: { type: Boolean, default: true },
 }, {
     timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' },
 });

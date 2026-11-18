@@ -51,11 +51,16 @@ async function runMigrationToMongo() {
         catch (e) {
             errors.push(`Categories migration warning: ${e.message}`);
         }
-        // 2. Migrate Products & Inventory (ONLY when MongoDB Atlas has zero products)
+        // 2. Migrate Products & Inventory (ONLY when MongoDB Atlas has zero products and demo products have not been cleared)
         try {
+            const demoClearedSetting = database_js_1.db.prepare("SELECT value FROM website_settings WHERE key = 'demo_products_cleared'").get();
+            const isDemoCleared = demoClearedSetting && demoClearedSetting.value === 'true';
             const mongoProductCount = await index_js_1.Product.countDocuments();
             if (mongoProductCount > 0) {
                 console.log(`[Migration] MongoDB Atlas already has ${mongoProductCount} products. Skipping SQLite initial seed migration to preserve deletions and archives.`);
+            }
+            else if (isDemoCleared) {
+                console.log('[Migration] Demo products have been cleared by admin. Skipping initial catalog migration to MongoDB Atlas.');
             }
             else {
                 const rows = database_js_1.db.prepare('SELECT * FROM products').all() || [];

@@ -48,6 +48,7 @@ export const CheckoutPage: React.FC = () => {
   const [customerName, setCustomerName] = useState(user?.full_name || '');
   const [customerEmail, setCustomerEmail] = useState(user?.email || '');
   const [customerPhone, setCustomerPhone] = useState(user?.phone || '');
+  const [whatsappConsent, setWhatsappConsent] = useState(true);
 
   // Address fields
   const [addressLine1, setAddressLine1] = useState('');
@@ -258,6 +259,7 @@ export const CheckoutPage: React.FC = () => {
         payment_method: paymentMethod,
         utr_number: paymentMethod === 'upi_qr' ? utrNumber.trim() : undefined,
         payment_screenshot: paymentMethod === 'upi_qr' && paymentScreenshot ? paymentScreenshot : undefined,
+        whatsapp_consent: whatsappConsent,
         notes: orderNotes.trim() || undefined
       };
 
@@ -641,6 +643,18 @@ export const CheckoutPage: React.FC = () => {
                     placeholder="9876543210"
                     className="w-full px-3 py-2 border border-gray-300 rounded text-xs focus:outline-none"
                   />
+                  <div className="mt-2 flex items-start space-x-2">
+                    <input
+                      type="checkbox"
+                      id="whatsapp-consent"
+                      checked={whatsappConsent}
+                      onChange={(e) => setWhatsappConsent(e.target.checked)}
+                      className="mt-0.5 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500 cursor-pointer"
+                    />
+                    <label htmlFor="whatsapp-consent" className="text-[11px] text-gray-600 cursor-pointer select-none">
+                      <span className="font-semibold text-gray-800">Send order confirmation & live tracking updates via WhatsApp</span> to this number.
+                    </label>
+                  </div>
                 </div>
               </div>
             </div>

@@ -227,6 +227,15 @@ function initDatabase() {
       razorpay_payment_id TEXT,
       tracking_number TEXT,
       notes TEXT,
+      owner_email_status TEXT DEFAULT 'PENDING',
+      owner_whatsapp_status TEXT DEFAULT 'PENDING',
+      customer_email_status TEXT DEFAULT 'PENDING',
+      customer_whatsapp_status TEXT DEFAULT 'PENDING',
+      notification_sent_at TEXT,
+      notification_error TEXT,
+      retry_count INTEGER DEFAULT 0,
+      whatsapp_message_id TEXT,
+      whatsapp_consent INTEGER DEFAULT 1,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
       FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE SET NULL
@@ -435,6 +444,42 @@ function initDatabase() {
         catch (e) { }
         try {
             exports.db.exec(`ALTER TABLE orders ADD COLUMN tracking_url TEXT;`);
+        }
+        catch (e) { }
+        try {
+            exports.db.exec(`ALTER TABLE orders ADD COLUMN owner_email_status TEXT DEFAULT 'PENDING';`);
+        }
+        catch (e) { }
+        try {
+            exports.db.exec(`ALTER TABLE orders ADD COLUMN owner_whatsapp_status TEXT DEFAULT 'PENDING';`);
+        }
+        catch (e) { }
+        try {
+            exports.db.exec(`ALTER TABLE orders ADD COLUMN customer_email_status TEXT DEFAULT 'PENDING';`);
+        }
+        catch (e) { }
+        try {
+            exports.db.exec(`ALTER TABLE orders ADD COLUMN customer_whatsapp_status TEXT DEFAULT 'PENDING';`);
+        }
+        catch (e) { }
+        try {
+            exports.db.exec(`ALTER TABLE orders ADD COLUMN notification_sent_at TEXT;`);
+        }
+        catch (e) { }
+        try {
+            exports.db.exec(`ALTER TABLE orders ADD COLUMN notification_error TEXT;`);
+        }
+        catch (e) { }
+        try {
+            exports.db.exec(`ALTER TABLE orders ADD COLUMN retry_count INTEGER DEFAULT 0;`);
+        }
+        catch (e) { }
+        try {
+            exports.db.exec(`ALTER TABLE orders ADD COLUMN whatsapp_message_id TEXT;`);
+        }
+        catch (e) { }
+        try {
+            exports.db.exec(`ALTER TABLE orders ADD COLUMN whatsapp_consent INTEGER DEFAULT 1;`);
         }
         catch (e) { }
         try {
@@ -730,11 +775,12 @@ function seedInitialData() {
             insertCoupon.run('VKROBOTICS', 'Flat ₹150 off on Robotics and Drone Project Kits', 'fixed', 150, 999, 150);
             insertCoupon.run('FREESHIP', 'Free shipping on orders above ₹499', 'fixed', 60, 499, 60);
         }
-        // 6. Ensure Products exist (only on fresh first-time seed in standalone SQLite mode, never in MongoDB Atlas mode or if catalog already seeded)
+        // 6. Ensure Products exist (only on fresh first-time seed in standalone SQLite mode, never in MongoDB Atlas mode or if catalog already seeded or demo products cleared)
         const isMongoConfigured = Boolean(process.env.MONGODB_URI || process.env.VERCEL);
         const existingProducts = exports.db.prepare('SELECT COUNT(*) as count FROM products').get();
         const catalogSeeded = exports.db.prepare("SELECT value FROM website_settings WHERE key = 'catalog_seeded'").get();
-        if (!isMongoConfigured && existingProducts.count === 0 && (!catalogSeeded || catalogSeeded.value !== 'true')) {
+        const demoCleared = exports.db.prepare("SELECT value FROM website_settings WHERE key = 'demo_products_cleared'").get();
+        if (!isMongoConfigured && existingProducts.count === 0 && (!catalogSeeded || catalogSeeded.value !== 'true') && (!demoCleared || demoCleared.value !== 'true')) {
             seedProducts();
             exports.db.prepare("INSERT OR REPLACE INTO website_settings (key, value) VALUES ('catalog_seeded', 'true')").run();
         }

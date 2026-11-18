@@ -504,6 +504,15 @@ export function filterFallbackProducts(params: {
   products: Product[];
   pagination: { total: number; page: number; limit: number; totalPages: number };
 } {
+  try {
+    if (typeof window !== 'undefined' && localStorage.getItem('vk_demo_cleared') === 'true') {
+      return {
+        products: [],
+        pagination: { total: 0, page: 1, limit: params.limit || 48, totalPages: 1 }
+      };
+    }
+  } catch {}
+
   let list = [...FALLBACK_PRODUCTS];
 
   if (params.q) {

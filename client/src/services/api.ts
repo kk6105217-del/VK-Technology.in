@@ -779,7 +779,25 @@ export const api = {
         body: JSON.stringify(payload)
       });
       try {
+        localStorage.removeItem('vk_admin_products_cache');
         realtimeSync.notify('PRODUCT_PERMANENTLY_DELETED', res);
+      } catch {}
+      return res;
+    },
+    clearDemoProducts: async () => {
+      const res = await request<{
+        success: boolean;
+        message: string;
+        clearedCount: number;
+        remainingCount: number;
+        remainingProducts: any[];
+      }>('/products/admin/clear-demo-products', {
+        method: 'POST'
+      });
+      try {
+        localStorage.setItem('vk_demo_cleared', 'true');
+        localStorage.removeItem('vk_admin_products_cache');
+        realtimeSync.notify('PRODUCT_DELETED', { clearDemo: true, ...res });
       } catch {}
       return res;
     },
@@ -1027,13 +1045,30 @@ export const api = {
         method: 'PATCH',
         body: JSON.stringify(data)
       }),
-    retryNotification: (orderId: number, logId: number) =>
-      request<{ message: string }>(`/orders/admin/${orderId}/retry-notification`, {
+    retryNotification: (orderId: number, options?: { channel?: string; logId?: number; log_id?: number }) =>
+      request<{ success: boolean; message: string; dispatch?: any }>(`/orders/admin/${orderId}/retry-notification`, {
         method: 'POST',
-        body: JSON.stringify({ log_id: logId })
+        body: JSON.stringify({
+          channel: options?.channel,
+          log_id: options?.logId || options?.log_id
+        })
       }),
     getNotifications: (orderId: number) =>
-      request<{ logs: any[] }>(`/orders/admin/${orderId}/notifications`),
+      request<{
+        orderId: number;
+        orderNumber: string;
+        channels: {
+          ownerEmail: { recipient: string; status: 'PENDING' | 'SENT' | 'FAILED' };
+          ownerWhatsApp: { recipient: string; status: 'PENDING' | 'SENT' | 'FAILED'; directLink?: string };
+          customerEmail: { recipient: string; status: 'PENDING' | 'SENT' | 'FAILED' };
+          customerWhatsApp: { recipient: string; status: 'PENDING' | 'SENT' | 'FAILED'; directLink?: string };
+        };
+        notificationSentAt?: string | null;
+        notificationError?: string | null;
+        retryCount: number;
+        whatsappMessageId?: string | null;
+        logs: any[];
+      }>(`/orders/admin/${orderId}/notifications`),
     getInvoice: (id: number | string) =>
       request<{ invoice: any }>(`/orders/${id}/invoice`),
   },

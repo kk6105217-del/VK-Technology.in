@@ -150,6 +150,16 @@ export interface Order {
   notes?: string | null;
   utr_number?: string | null;
   payment_screenshot?: string | null;
+  // Multi-Channel Notifications
+  owner_email_status?: 'PENDING' | 'SENT' | 'FAILED';
+  owner_whatsapp_status?: 'PENDING' | 'SENT' | 'FAILED';
+  customer_email_status?: 'PENDING' | 'SENT' | 'FAILED';
+  customer_whatsapp_status?: 'PENDING' | 'SENT' | 'FAILED';
+  notification_sent_at?: string | null;
+  notification_error?: string | null;
+  retry_count?: number;
+  whatsapp_message_id?: string | null;
+  whatsapp_consent?: boolean;
   created_at: string;
   updated_at?: string;
   items?: OrderItem[];

@@ -2,7 +2,7 @@ import { Router, Response } from 'express';
 import { db } from '../database.js';
 import { config } from '../config.js';
 import { authenticateToken, requireAdmin, AuthenticatedRequest } from '../middleware/auth.js';
-import { sendOrderStatusUpdate } from '../services/notifications.js';
+import { sendOrderStatusUpdate, dispatchOrderNotifications } from '../services/notifications.js';
 
 export const upiRouter = Router();
 
@@ -123,8 +123,9 @@ const handleApprovePayment = async (req: AuthenticatedRequest, res: Response) =>
       `Approved UPI payment for order #${payment.order_number} (Amount: ₹${payment.amount}, UTR: ${payment.utr_number})`
     );
 
-    // 4. Notify customer of verification
+    // 4. Notify customer of verification and dispatch confirmed order notifications
     await sendOrderStatusUpdate(payment.order_id, 'Payment Verified & Confirmed');
+    dispatchOrderNotifications(payment.order_id).catch(e => console.warn('[UPI Notification Dispatch Warning]:', e.message));
 
     res.json({ message: 'UPI payment successfully verified and marked as Paid.' });
   } catch (error: any) {
